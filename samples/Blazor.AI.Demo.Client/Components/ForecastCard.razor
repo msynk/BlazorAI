@@ -1,0 +1,39 @@
+@namespace Blazor.AI.Demo.Client.Components
+
+@*
+    A component the model is allowed to render.
+
+    Nothing about it knows it is generative: it is an ordinary Blazor component with ordinary
+    parameters. The registry decides that model output may instantiate it, and the binder decides
+    which of its parameters model output may set.
+*@
+
+<div class="forecast-card">
+    <div class="forecast-card__city">@City</div>
+    <div class="forecast-card__temp">@Degrees&deg;</div>
+    <div class="forecast-card__meta">
+        <span>@Condition</span>
+        @if (Humidity > 0)
+        {
+            <span>@Humidity% humidity</span>
+        }
+    </div>
+</div>
+
+@code {
+    /// <summary>The city being forecast.</summary>
+    [Parameter, Description("The city name.")]
+    public string City { get; set; } = string.Empty;
+
+    /// <summary>The temperature in Celsius.</summary>
+    [Parameter, Description("Temperature in degrees Celsius.")]
+    public int Degrees { get; set; }
+
+    /// <summary>A one-word summary such as Clear or Snow.</summary>
+    [Parameter, Description("One word summary, for example Clear, Snow, Showers.")]
+    public string Condition { get; set; } = string.Empty;
+
+    /// <summary>Relative humidity as a percentage.</summary>
+    [Parameter, Description("Relative humidity as a percentage.")]
+    public int Humidity { get; set; }
+}

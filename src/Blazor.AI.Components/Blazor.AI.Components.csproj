@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <RootNamespace>Blazor.AI.Components</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <AddRazorSupportForMvc>false</AddRazorSupportForMvc>
+    <StaticWebAssetBasePath>_content/Blazor.AI.Components</StaticWebAssetBasePath>
+    <Description>The Blazor.AI component library: chat, streaming, agents, tools, artifacts, citations, generative UI, and a complete design-token theme.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Blazor.AI.Core/Blazor.AI.Core.csproj" />
+    <ProjectReference Include="../Blazor.AI.Markdown/Blazor.AI.Markdown.csproj" />
+    <ProjectReference Include="../Blazor.AI.GenerativeUI/Blazor.AI.GenerativeUI.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+</Project>

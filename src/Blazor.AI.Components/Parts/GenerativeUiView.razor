@@ -1,0 +1,82 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+@inject IGenerativeUiRegistry Registry
+
+@*
+    Renders a component the model chose, with the properties it produced.
+
+    Resolution goes through the registry, never through the type name in the payload, so a model can
+    only ever instantiate something the application deliberately allowed. A name that is not
+    registered renders a quiet placeholder rather than an exception, because a hallucinated
+    component should not take down the response around it.
+*@
+
+@if (_component is null)
+{
+    @if (!Part.IsStreaming)
+    {
+        <div class="bai-chip" title="@($"No component named '{Part.ComponentName}' is registered.")">
+            <AiIcon Name="alert" />
+            <span>@Part.ComponentName</span>
+        </div>
+    }
+}
+else
+{
+    <div class="bai-generative">
+        <RendererBoundary Label="@($"'{Part.ComponentName}' could not be rendered")">
+            @RenderComponent()
+        </RendererBoundary>
+    </div>
+
+    @if (ShowBindingErrors && _binding is { IsComplete: false } binding && !Part.IsStreaming)
+    {
+        <div class="bai-message__meta">
+            @foreach (var error in binding.Errors)
+            {
+                <span class="bai-chip">@error</span>
+            }
+        </div>
+    }
+}
+
+@code {
+    private GenerativeComponent? _component;
+    private GenerativeBindResult? _binding;
+    private int _boundVersion = -1;
+
+    /// <summary>The part to render.</summary>
+    [Parameter, EditorRequired]
+    public GenerativeUiPart Part { get; set; } = default!;
+
+    /// <summary>
+    /// Show properties that failed to bind. Useful while developing the prompt that produces them,
+    /// noise in production.
+    /// </summary>
+    [Parameter]
+    public bool ShowBindingErrors { get; set; }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        _component = Registry.Find(Part.ComponentName);
+        if (_component is null || _boundVersion == Part.Version) return;
+
+        _boundVersion = Part.Version;
+        _binding = GenerativePropsBinder.Bind(_component, Part.Props);
+    }
+
+    private RenderFragment RenderComponent() => __builder =>
+    {
+        if (_component is null || _binding is null) return;
+
+        __builder.OpenComponent(0, _component.ComponentType);
+        var sequence = 1;
+        foreach (var (name, value) in _binding.Parameters)
+        {
+            __builder.AddComponentParameter(sequence++, name, value);
+        }
+
+        __builder.CloseComponent();
+    };
+}

@@ -1,0 +1,29 @@
+@page "/streaming"
+
+<DemoPage Title="Streaming"
+          Summary="A long Markdown answer arriving a few characters at a time: headings, a table, a fenced code block, a quote.">
+    <ChildContent>
+        <AiChat Session="_session"
+                EmptyTitle="Watch it arrive"
+                EmptyBody="Send anything. The reply is a full Markdown document written progressively."
+                Suggestions="@(new[] { "Compare the render modes" })" />
+    </ChildContent>
+
+    <Aside>
+        <h3>Why it does not flicker</h3>
+        <p>
+            The Markdown is re-parsed on every delta, but only the tail is: everything before the
+            last confirmed block boundary is kept. Fenced code is left unhighlighted until the
+            closing fence arrives, and an unmatched <code>**</code> is hidden rather than shown as a
+            stray asterisk.
+        </p>
+        <p class="demo__note">
+            Renders are capped at one per 50&nbsp;ms. Streaming faster than that changes nothing a
+            reader can see and costs real bandwidth on Blazor Server.
+        </p>
+    </Aside>
+</DemoPage>
+
+@code {
+    private readonly ChatSession _session = new(DemoTransports.Markdown());
+}

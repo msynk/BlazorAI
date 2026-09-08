@@ -1,0 +1,27 @@
+@page "/agent-input"
+
+<DemoPage Title="Agent asks a question"
+          Summary="A run that blocks mid-plan, offers suggested answers, and resumes from where it stopped.">
+    <ChildContent>
+        <AiChat Session="_session"
+                EmptyTitle="Start the migration"
+                Suggestions="@(new[] { "Migrate the database to the new schema" })" />
+    </ChildContent>
+
+    <Aside>
+        <h3>Blocked, not finished</h3>
+        <p>
+            The run moves to <code>WaitingForInput</code> and carries the question plus optional
+            one-tap answers. Choosing one submits it as a user message and the agent continues from
+            the step it stopped at.
+        </p>
+        <p class="demo__note">
+            This is the difference between an agent that asks and an agent that guesses. The state is
+            explicit, so the UI can make waiting look deliberate rather than stuck.
+        </p>
+    </Aside>
+</DemoPage>
+
+@code {
+    private readonly ChatSession _session = new(DemoAgentTransports.AsksForInput());
+}

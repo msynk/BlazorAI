@@ -1,0 +1,43 @@
+@namespace Blazor.AI.Demo.Client.Components
+
+@*
+    The frame around each demo: a title, a sentence about what it shows, and the demo itself.
+*@
+
+<PageTitle>@Title — Blazor.AI</PageTitle>
+
+<header class="demo__header">
+    <h1>@Title</h1>
+    <p>@Summary</p>
+</header>
+
+<div class="demo__body">
+    <div class="demo__chat">
+        @ChildContent
+    </div>
+
+    @if (Aside is not null)
+    {
+        <aside class="demo__aside">
+            @Aside
+        </aside>
+    }
+</div>
+
+@code {
+    /// <summary>The page heading.</summary>
+    [Parameter, EditorRequired]
+    public string Title { get; set; } = string.Empty;
+
+    /// <summary>One sentence on what the page demonstrates.</summary>
+    [Parameter]
+    public string? Summary { get; set; }
+
+    /// <summary>The demo itself.</summary>
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>Optional explanatory panel beside the demo.</summary>
+    [Parameter]
+    public RenderFragment? Aside { get; set; }
+}

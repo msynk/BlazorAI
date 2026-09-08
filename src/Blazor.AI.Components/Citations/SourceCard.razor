@@ -1,0 +1,55 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    One source. A link when the source is addressable, so the browser gives the user the usual
+    middle-click and context-menu affordances; a button otherwise.
+*@
+
+@if (Source.Url is { Length: > 0 } url && !OnActivate.HasDelegate)
+{
+    <a class="bai-source" href="@url" target="_blank" rel="noopener noreferrer">
+        @Body()
+    </a>
+}
+else
+{
+    <button type="button" class="bai-source" style="text-align:left" @onclick="() => OnActivate.InvokeAsync(Source)">
+        @Body()
+    </button>
+}
+
+@code {
+    /// <summary>The source to render.</summary>
+    [Parameter, EditorRequired]
+    public CitationSource Source { get; set; } = default!;
+
+    /// <summary>The marker number shown beside the title.</summary>
+    [Parameter]
+    public int? Number { get; set; }
+
+    /// <summary>Raised when the card is activated. When set, the card becomes a button.</summary>
+    [Parameter]
+    public EventCallback<CitationSource> OnActivate { get; set; }
+
+    private RenderFragment Body() => __builder =>
+    {
+        @if (Number is { } number && number != int.MaxValue)
+        {
+            <span class="bai-source__index">@number</span>
+        }
+        <span class="bai-source__body">
+            <span class="bai-source__title">@Source.Title</span>
+            <span class="bai-source__site">
+                @if (Source.IconUrl is { Length: > 0 } icon)
+                {
+                    <img class="bai-source__favicon" src="@icon" alt="" loading="lazy" />
+                }
+                @(Source.SiteName ?? HostOf(Source.Url) ?? Source.Kind.ToString())
+            </span>
+        </span>
+    };
+
+    private static string? HostOf(string? url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.Host : null;
+}

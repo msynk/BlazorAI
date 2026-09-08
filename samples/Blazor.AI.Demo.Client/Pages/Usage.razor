@@ -1,0 +1,82 @@
+@page "/usage"
+
+<DemoPage Title="Models and usage"
+          Summary="A model picker in the composer, and real accounting under each answer: tokens, cost, throughput, and context used.">
+    <ChildContent>
+        <AiChat Session="_session"
+                UiOptions="_options"
+                EmptyTitle="Pick a model and ask something"
+                Suggestions="@(new[] { "What did this turn cost?" })">
+            <ComposerLeading>
+                <ModelSelector @bind-ModelId="_modelId"
+                               OnModelSelected="OnModelSelected"
+                               Disabled="@(_session?.IsGenerating ?? false)" />
+            </ComposerLeading>
+            <ComposerHint>
+                <ContextMeter Conversation="_session?.Conversation" Model="_model" />
+            </ComposerHint>
+        </AiChat>
+    </ChildContent>
+
+    <Aside>
+        <h3>Optional and provider-independent</h3>
+        <p>
+            Every field is optional because providers report different subsets. The framework does
+            the arithmetic it can: throughput from output tokens over the streaming window, cost from
+            the rates in the model catalogue, context from the window the transport reported.
+        </p>
+        <h3>Selected model</h3>
+        @if (_model is { } model)
+        {
+            <ul>
+                <li><strong>Context</strong>: @(model.ContextWindow?.ToString("N0")) tokens</li>
+                <li><strong>Input</strong>: @($"{model.InputPricePerMillion:C2}") per million</li>
+                <li><strong>Output</strong>: @($"{model.OutputPricePerMillion:C2}") per million</li>
+                <li><strong>Tools</strong>: @(model.Supports(ModelCapabilities.Tools) ? "yes" : "no")</li>
+                <li><strong>Vision</strong>: @(model.Supports(ModelCapabilities.Vision) ? "yes" : "no")</li>
+            </ul>
+        }
+    </Aside>
+</DemoPage>
+
+@code {
+    private readonly AiUiOptions _options = AiUiOptions.Default with
+    {
+        ShowUsage = true,
+        ShowModelName = true,
+        ShowTimestamps = true,
+    };
+
+    private ChatSession? _session;
+    private AiModel? _model;
+    private string? _modelId;
+
+    [Inject] private IModelCatalog Catalog { get; set; } = default!;
+
+    protected override void OnInitialized()
+    {
+        _model = Catalog.DefaultModel;
+        _modelId = _model?.ModelId;
+        Rebuild();
+    }
+
+    private void OnModelSelected(AiModel model)
+    {
+        _model = model;
+        Rebuild();
+    }
+
+    private void Rebuild()
+    {
+        if (_model is null) return;
+
+        var conversation = _session?.Conversation ?? new Conversation();
+        _session = new ChatSession(
+            DemoInteractiveTransports.Metered(_model),
+            conversation,
+            new ChatSessionOptions
+            {
+                RequestOptions = new AiRequestOptions { ModelId = _model.ModelId, Temperature = 0.7 },
+            });
+    }
+}

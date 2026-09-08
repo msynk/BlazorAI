@@ -1,0 +1,108 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+@implements IDisposable
+
+@*
+    A multi-step agent run made legible: what it is trying to do, which step it is on, what each
+    step produced, and what it needs from the user.
+
+    The whole point of this component is that a spinner is not an acceptable answer to "what is it
+    doing". Every step is visible, with its own state and timing.
+*@
+
+<div class="bai-panel">
+    <div class="bai-panel__header" style="cursor:default">
+        <AiIcon Name="sparkle" />
+        <span class="bai-panel__title">@(Run.AgentName ?? Strings.Plan)</span>
+        <AgentStatusBadge Status="Run.Status" />
+    </div>
+
+    <div class="bai-panel__body">
+        @if (Run.Goal is { Length: > 0 } goal)
+        {
+            <div class="bai-step__summary" style="margin-bottom:var(--bai-space-3)">@goal</div>
+        }
+
+        @if (Run.Progress is { } progress && Run.Steps.Count > 0)
+        {
+            <div class="bai-usage" style="margin-bottom:var(--bai-space-2)">
+                <span>@Run.CompletedStepCount / @Run.Steps.Count</span>
+                <div class="bai-meter" role="progressbar"
+                     aria-valuenow="@((int)(progress * 100))" aria-valuemin="0" aria-valuemax="100">
+                    <div class="bai-meter__fill" style="width:@($"{progress * 100:0}%")"></div>
+                </div>
+                <span>@Strings.FormatDuration(Run.Elapsed)</span>
+            </div>
+        }
+
+        <ol class="bai-run__steps">
+            @foreach (var step in Run.Steps)
+            {
+                <li @key="step.StepId">
+                    <AgentStepView Step="step" />
+                </li>
+            }
+        </ol>
+
+        @if (Run.Status is AgentRunStatus.WaitingForInput && Run.PendingPrompt is { } prompt)
+        {
+            <div class="bai-approval" style="border-radius:var(--bai-radius);margin-top:var(--bai-space-3)">
+                <div class="bai-approval__text">@prompt</div>
+                @foreach (var suggestion in Run.PendingSuggestions ?? [])
+                {
+                    <button type="button" class="bai-btn bai-btn--outline"
+                            @onclick="() => RespondAsync(suggestion)">
+                        @suggestion
+                    </button>
+                }
+            </div>
+        }
+
+        @if (Run.Error is { } error)
+        {
+            <div style="margin-top:var(--bai-space-3)">
+                <ErrorView Error="error" Compact="true" />
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private AgentRun? _subscribed;
+
+    /// <summary>The run to render.</summary>
+    [Parameter, EditorRequired]
+    public AgentRun Run { get; set; } = default!;
+
+    /// <summary>The session, used to answer a blocked run.</summary>
+    [Parameter]
+    public ChatSession? Session { get; set; }
+
+    /// <summary>Raised when the user answers a pending question.</summary>
+    [Parameter]
+    public EventCallback<string> OnRespond { get; set; }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        if (ReferenceEquals(_subscribed, Run)) return;
+        if (_subscribed is not null) _subscribed.Changed -= OnRunChanged;
+        _subscribed = Run;
+        _subscribed.Changed += OnRunChanged;
+    }
+
+    private void OnRunChanged(AgentRun run) => RequestRender();
+
+    private async Task RespondAsync(string answer)
+    {
+        await OnRespond.InvokeAsync(answer);
+        if (Session is not null) await Session.RespondToAgentAsync(Run.RunId, answer);
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        if (_subscribed is not null) _subscribed.Changed -= OnRunChanged;
+        _subscribed = null;
+    }
+}

@@ -1,0 +1,42 @@
+@page "/custom-tool"
+
+<DemoPage Title="Custom tool UI"
+          Summary="One tool rendered by an application component instead of the default card, everywhere that tool appears.">
+    <ChildContent>
+        <AiChat Session="_session"
+                EmptyTitle="Search the documentation"
+                Suggestions="@(new[] { "Find the docs on render modes" })" />
+    </ChildContent>
+
+    <Aside>
+        <h3>Registered by tool name</h3>
+        <p>
+            <code>search_docs</code> is rendered by <code>SearchResultCard</code>, an ordinary
+            component in this project. The registry maps a tool name to a renderer, so the
+            substitution applies wherever that tool is called without touching the message list.
+        </p>
+        <CodeBlockView Language="csharp" Code="@Snippet" />
+        <p>
+            The same registry takes renderers for message part kinds, artifact kinds, and structured
+            output schemas.
+        </p>
+    </Aside>
+</DemoPage>
+
+@code {
+    private ChatSession? _session;
+
+    [Inject] private IToolRegistry Tools { get; set; } = default!;
+
+    protected override void OnInitialized() => _session = new ChatSession(
+        DemoToolTransports.CallsTool(
+            "search_docs",
+            """{"query":"render modes"}""",
+            "Two passages matched. The first covers choosing a mode per component; the second covers what happens when a circuit is lost."),
+        tools: Tools);
+
+    private const string Snippet = """
+        services.ConfigureAiRenderers(renderers =>
+            renderers.RegisterTool<SearchResultCard>("search_docs"));
+        """;
+}

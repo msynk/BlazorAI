@@ -1,0 +1,46 @@
+@page "/performance"
+
+<DemoPage Title="Long conversations"
+          Summary="Five hundred messages with code, tables, tool calls, and citations, rendered through a virtualized list.">
+    <ChildContent>
+        <AiChat Session="_session" UiOptions="_options" />
+    </ChildContent>
+
+    <Aside>
+        <h3>Virtualized past a threshold</h3>
+        <p>
+            Below sixty messages every message is rendered, because variable heights make a
+            virtualized scrollbar jumpier than simply drawing everything. Above it, only what fits on
+            screen is rendered.
+        </p>
+        <h3>Where the render budget goes</h3>
+        <ul>
+            <li>A part subscribes to itself, so a token re-renders one paragraph.</li>
+            <li>Renders are coalesced to one per @(_options.RenderInterval.TotalMilliseconds)&nbsp;ms.</li>
+            <li>Text accumulates in a builder, so appending stays linear.</li>
+            <li>Markdown before the last block boundary is parsed once and reused.</li>
+        </ul>
+        <p class="demo__note">
+            Scroll to the top and back. New content only follows the view while you are already at
+            the bottom.
+        </p>
+    </Aside>
+</DemoPage>
+
+@code {
+    private readonly AiUiOptions _options = AiUiOptions.Default with
+    {
+        ShowTimestamps = true,
+        VirtualizeThreshold = 60,
+    };
+
+    private ChatSession? _session;
+
+    [Inject] private ChatSessionFactory Sessions { get; set; } = default!;
+
+    protected override void OnInitialized()
+    {
+        var conversation = DemoConversations.Long(500);
+        _session = Sessions.Create(conversation);
+    }
+}

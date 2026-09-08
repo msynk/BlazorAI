@@ -1,0 +1,87 @@
+@page "/conversations"
+
+<DemoPage Title="Multiple conversations"
+          Summary="A sidebar over a conversation store, grouped by recency, with new, switch, and delete.">
+    <ChildContent>
+        <div style="display:flex;height:100%;min-height:0">
+            <div style="width:15rem;flex:none;border-right:1px solid var(--bai-color-border);display:flex;flex-direction:column">
+                <ConversationList Conversations="_summaries"
+                                  SelectedId="@_session?.Conversation.ConversationId"
+                                  OnSelect="OpenAsync"
+                                  OnDelete="DeleteAsync"
+                                  OnNew="NewConversation" />
+            </div>
+
+            @if (_session is not null)
+            {
+                <div style="flex:1 1 auto;min-width:0">
+                    <AiChat Session="_session"
+                            @key="_session.Conversation.ConversationId"
+                            EmptyTitle="New conversation"
+                            EmptyBody="Send a message and this thread will appear in the list." />
+                </div>
+            }
+        </div>
+    </ChildContent>
+
+    <Aside>
+        <h3>Where state lives</h3>
+        <p>
+            A <code>Conversation</code> is a plain observable object, and a <code>ChatSession</code>
+            drives one of them. Switching threads means pointing the chat at a different conversation,
+            not tearing anything down.
+        </p>
+        <p>
+            Persistence is an interface. This demo uses the in-memory store; a real application
+            implements <code>IConversationStore</code> over its own database.
+        </p>
+    </Aside>
+</DemoPage>
+
+@code {
+    private readonly List<Conversation> _conversations = [];
+    private IReadOnlyList<ConversationSummary> _summaries = [];
+    private ChatSession? _session;
+
+    [Inject] private ChatSessionFactory Sessions { get; set; } = default!;
+
+    protected override void OnInitialized() => NewConversation();
+
+    private void NewConversation()
+    {
+        var conversation = new Conversation();
+        conversation.Changed += _ => Refresh();
+        _conversations.Insert(0, conversation);
+
+        _session = Sessions.Create(conversation);
+        Refresh();
+    }
+
+    private void OpenAsync(ConversationSummary summary)
+    {
+        var conversation = _conversations.FirstOrDefault(c => c.ConversationId == summary.ConversationId);
+        if (conversation is null) return;
+
+        _session = Sessions.Create(conversation);
+        Refresh();
+    }
+
+    private void DeleteAsync(ConversationSummary summary)
+    {
+        _conversations.RemoveAll(c => c.ConversationId == summary.ConversationId);
+
+        if (_session?.Conversation.ConversationId == summary.ConversationId)
+        {
+            _session = _conversations.Count > 0 ? Sessions.Create(_conversations[0]) : null;
+            if (_session is null) NewConversation();
+        }
+
+        Refresh();
+    }
+
+    private void Refresh()
+    {
+        _summaries = _conversations.Select(c => c.ToSummary()).ToArray();
+        InvokeAsync(StateHasChanged);
+    }
+}

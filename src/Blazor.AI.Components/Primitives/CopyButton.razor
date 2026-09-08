@@ -1,0 +1,87 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+@inject AiInterop Interop
+
+@*
+    Copies text and confirms it, because a copy button that gives no feedback leaves the user
+    guessing whether it worked.
+*@
+
+<button type="button"
+        class="bai-btn bai-btn--icon @Class"
+        title="@(_copied ? Strings.Copied : Label ?? Strings.Copy)"
+        aria-label="@(Label ?? Strings.Copy)"
+        disabled="@(Content is null)"
+        @onclick="CopyAsync">
+    <AiIcon Name="@(_copied ? "check" : "copy")" />
+    @if (ShowLabel)
+    {
+        <span>@(_copied ? Strings.Copied : Label ?? Strings.Copy)</span>
+    }
+</button>
+
+@code {
+    private bool _copied;
+    private CancellationTokenSource? _reset;
+
+    /// <summary>The text to copy. A null value disables the button.</summary>
+    [Parameter]
+    public string? Content { get; set; }
+
+    /// <summary>Overrides the default label.</summary>
+    [Parameter]
+    public string? Label { get; set; }
+
+    /// <summary>Show the label beside the icon.</summary>
+    [Parameter]
+    public bool ShowLabel { get; set; }
+
+    /// <summary>Extra CSS classes.</summary>
+    [Parameter]
+    public string? Class { get; set; }
+
+    /// <summary>Raised after a successful copy.</summary>
+    [Parameter]
+    public EventCallback OnCopied { get; set; }
+
+    /// <summary>How long the confirmation stays visible.</summary>
+    [Parameter]
+    public TimeSpan ConfirmationDuration { get; set; } = TimeSpan.FromSeconds(2);
+
+    private async Task CopyAsync()
+    {
+        if (Content is null) return;
+
+        var ok = await Interop.CopyAsync(Content);
+        if (!ok) return;
+
+        _copied = true;
+        await OnCopied.InvokeAsync();
+        StateHasChanged();
+
+        _reset?.Cancel();
+        _reset?.Dispose();
+        _reset = new CancellationTokenSource();
+        var token = _reset.Token;
+
+        try
+        {
+            await Task.Delay(ConfirmationDuration, token);
+            _copied = false;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException)
+        {
+            // Another copy started; that one owns the reset.
+        }
+    }
+
+    /// <inheritdoc />
+    protected override ValueTask DisposeCoreAsync()
+    {
+        _reset?.Cancel();
+        _reset?.Dispose();
+        _reset = null;
+        return ValueTask.CompletedTask;
+    }
+}

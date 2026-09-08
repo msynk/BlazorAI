@@ -1,0 +1,28 @@
+@page "/reasoning"
+
+<DemoPage Title="Reasoning"
+          Summary="Model thinking, shown in its own collapsed panel and kept out of the answer, the copy, and the next prompt.">
+    <ChildContent>
+        <AiChat Session="_session"
+                EmptyTitle="Ask something with a trade-off"
+                Suggestions="@(new[] { "What does a round trip actually cost?" })" />
+    </ChildContent>
+
+    <Aside>
+        <h3>A separate part, not a prefix</h3>
+        <p>
+            Reasoning arrives as <code>ReasoningDeltaEvent</code> and becomes a
+            <code>ReasoningPart</code>. Because it is a distinct part rather than text with a label,
+            it can be collapsed, timed, excluded from copy, and left out of the plain-text
+            projection sent back to the provider on the next turn.
+        </p>
+        <p>
+            The panel is open while the model thinks and collapses once the answer starts, with the
+            elapsed time in its header.
+        </p>
+    </Aside>
+</DemoPage>
+
+@code {
+    private readonly ChatSession _session = new(DemoTransports.Reasoning());
+}

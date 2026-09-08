@@ -1,0 +1,36 @@
+@page "/generative"
+
+<DemoPage Title="Generative UI"
+          Summary="The model chooses a component from a registry and supplies its properties. Anything it names that is not registered renders nothing.">
+    <ChildContent>
+        <AiChat Session="_session"
+                EmptyTitle="Ask about three cities"
+                Suggestions="@(new[] { "What is the week like in Oslo, Lisbon and Auckland?" })" />
+    </ChildContent>
+
+    <Aside>
+        <h3>The registry is the boundary</h3>
+        <p>
+            A model can only instantiate a component the application registered, and can only set the
+            parameters that registration exposed. Event callbacks, render fragments, and
+            unmatched-attribute catch-alls are excluded, so generated payloads cannot wire up
+            handlers or inject attributes.
+        </p>
+        <CodeBlockView Language="csharp" Code="@Snippet" />
+        <p class="demo__note">
+            <code>registry.DescribeAll()</code> produces the JSON Schema to put in the prompt. Give
+            the model the schema and it stops guessing component names.
+        </p>
+    </Aside>
+</DemoPage>
+
+@code {
+    private readonly ChatSession _session = new(DemoInteractiveTransports.GenerativeUi());
+
+    private const string Snippet = """
+        services.ConfigureGenerativeUi(registry => registry.Register<ForecastCard>(
+            "forecast_card",
+            "Shows the current weather for one city.",
+            required: "City"));
+        """;
+}

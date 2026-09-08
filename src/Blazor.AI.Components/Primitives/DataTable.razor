@@ -1,0 +1,77 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    Renders a JSON array of objects as a table, taking the column set from the union of the keys
+    seen. The union matters while streaming: early rows often have fewer fields than later ones, and
+    a table built from the first row alone would drop columns as they appear.
+*@
+
+<div class="bai-table-wrap">
+    <table class="bai-prose">
+        <thead>
+            <tr>
+                @foreach (var column in _columns)
+                {
+                    <th>@StructuredDataView.Humanize(column)</th>
+                }
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var row in _rows)
+            {
+                <tr>
+                    @foreach (var column in _columns)
+                    {
+                        <td>@Cell(row, column)</td>
+                    }
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    private readonly List<string> _columns = [];
+    private JsonElement[] _rows = [];
+
+    /// <summary>The array of objects to render.</summary>
+    [Parameter, EditorRequired]
+    public JsonElement Rows { get; set; }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        _columns.Clear();
+        if (Rows.ValueKind is not JsonValueKind.Array)
+        {
+            _rows = [];
+            return;
+        }
+
+        _rows = Rows.EnumerateArray().ToArray();
+
+        foreach (var row in _rows)
+        {
+            if (row.ValueKind is not JsonValueKind.Object) continue;
+            foreach (var property in row.EnumerateObject())
+            {
+                if (!_columns.Contains(property.Name, StringComparer.Ordinal)) _columns.Add(property.Name);
+            }
+        }
+    }
+
+    private static string Cell(JsonElement row, string column)
+    {
+        if (row.ValueKind is not JsonValueKind.Object) return string.Empty;
+        if (!row.TryGetProperty(column, out var value)) return string.Empty;
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString() ?? string.Empty,
+            JsonValueKind.Null or JsonValueKind.Undefined => string.Empty,
+            JsonValueKind.Object or JsonValueKind.Array => value.GetRawText(),
+            _ => value.ToString(),
+        };
+    }
+}

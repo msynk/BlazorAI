@@ -1,0 +1,47 @@
+@page "/tools"
+
+<DemoPage Title="Tool calling"
+          Summary="The model asks for a tool, the framework runs it, feeds the result back, and the model answers.">
+    <ChildContent>
+        <AiChat Session="_session"
+                EmptyTitle="Ask about the weather"
+                EmptyBody="The model will call get_weather, wait for the result, and answer from it."
+                Suggestions="@(new[] { "What is the weather in Oslo?" })" />
+    </ChildContent>
+
+    <Aside>
+        <h3>Who runs the tool</h3>
+        <p>
+            Not the transport. It emits <code>ToolCallStartedEvent</code>, the session resolves the
+            tool from the registry, checks the approval policy, runs it, records the result on the
+            call, and asks the model again. The transport reads the result off the message it is
+            handed on that second request.
+        </p>
+        <CodeBlockView Language="csharp" Code="@Snippet" />
+        <p class="demo__note">
+            Arguments stream in as raw JSON and are parsed leniently on every delta, which is why the
+            card shows <code>city: "Osl"</code> before the closing brace arrives.
+        </p>
+    </Aside>
+</DemoPage>
+
+@code {
+    private ChatSession? _session;
+
+    [Inject] private IToolRegistry ToolRegistry { get; set; } = default!;
+
+    protected override void OnInitialized() => _session = new ChatSession(
+        DemoToolTransports.CallsTool(
+            "get_weather",
+            """{"city":"Oslo","days":1}""",
+            "It is -3 degrees in Oslo with snow and 81% humidity. Pack for it."),
+        tools: ToolRegistry);
+
+    private const string Snippet = """
+        services.AddBlazorAI()
+            .AddTool(AiTool.Create<WeatherArgs, WeatherResult>(
+                "get_weather",
+                "Look up the current weather for a city.",
+                (args, token) => weather.GetAsync(args.City, token)));
+        """;
+}

@@ -1,0 +1,197 @@
+/* The demo shell. The framework brings its own styles; this is only the page around them. */
+
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  font-family: var(--bai-font-sans);
+  background: var(--bai-color-bg);
+  color: var(--bai-color-fg);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.demo {
+  display: grid;
+  grid-template-columns: 17rem 1fr;
+  height: 100vh;
+}
+
+.demo__nav {
+  border-right: 1px solid var(--bai-color-border);
+  background: var(--bai-color-bg-subtle);
+  overflow-y: auto;
+  padding-bottom: var(--bai-space-5);
+}
+
+.demo__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--bai-space-2);
+  padding: var(--bai-space-4);
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: inherit;
+  text-decoration: none;
+  position: sticky;
+  top: 0;
+  background: var(--bai-color-bg-subtle);
+  border-bottom: 1px solid var(--bai-color-border);
+  z-index: 1;
+}
+
+.demo__group {
+  padding: var(--bai-space-4) var(--bai-space-4) var(--bai-space-1);
+  font-size: var(--bai-font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--bai-color-fg-subtle);
+}
+
+.demo__link {
+  display: flex;
+  align-items: center;
+  gap: var(--bai-space-2);
+  padding: var(--bai-space-2) var(--bai-space-4);
+  font-size: var(--bai-font-size-sm);
+  color: var(--bai-color-fg-muted);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+}
+
+.demo__link:hover {
+  background: var(--bai-color-bg-muted);
+  color: var(--bai-color-fg);
+}
+
+.demo__link.active {
+  color: var(--bai-color-accent);
+  border-left-color: var(--bai-color-accent);
+  background: var(--bai-color-accent-subtle);
+  font-weight: 500;
+}
+
+.demo__index {
+  min-width: 1.4rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--bai-color-fg-subtle);
+  font-size: var(--bai-font-size-xs);
+}
+
+.demo__main {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.demo__header {
+  padding: var(--bai-space-4) var(--bai-space-5);
+  border-bottom: 1px solid var(--bai-color-border);
+}
+
+.demo__header h1 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.demo__header p {
+  margin: var(--bai-space-1) 0 0;
+  color: var(--bai-color-fg-muted);
+  font-size: var(--bai-font-size-sm);
+  max-width: 60ch;
+}
+
+.demo__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+.demo__chat {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.demo__aside {
+  width: 22rem;
+  flex: none;
+  border-left: 1px solid var(--bai-color-border);
+  overflow-y: auto;
+  padding: var(--bai-space-4);
+}
+
+.demo__page {
+  padding: var(--bai-space-5);
+  overflow-y: auto;
+}
+
+.demo__note {
+  margin: var(--bai-space-4) 0 0;
+  padding: var(--bai-space-3);
+  border-left: 3px solid var(--bai-color-accent);
+  background: var(--bai-color-accent-subtle);
+  font-size: var(--bai-font-size-sm);
+  border-radius: 0 var(--bai-radius) var(--bai-radius) 0;
+}
+
+/* The component the model is allowed to render on the generative UI page. */
+.forecast-card {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 9rem;
+  padding: var(--bai-space-3);
+  margin-right: var(--bai-space-2);
+  border: 1px solid var(--bai-color-border);
+  border-radius: var(--bai-radius);
+  background: var(--bai-color-bg-subtle);
+}
+
+.forecast-card__city {
+  font-size: var(--bai-font-size-sm);
+  color: var(--bai-color-fg-muted);
+}
+
+.forecast-card__temp {
+  font-size: 1.75rem;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.forecast-card__meta {
+  display: flex;
+  gap: var(--bai-space-2);
+  font-size: var(--bai-font-size-xs);
+  color: var(--bai-color-fg-subtle);
+}
+
+@media (max-width: 900px) {
+  .demo {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  .demo__nav {
+    display: flex;
+    overflow-x: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--bai-color-border);
+    padding: 0;
+  }
+
+  .demo__group {
+    display: none;
+  }
+
+  .demo__aside {
+    display: none;
+  }
+}

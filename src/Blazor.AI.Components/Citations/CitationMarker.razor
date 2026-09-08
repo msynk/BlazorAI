@@ -1,0 +1,34 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    The small numbered chip that appears inline where a claim is attributed. A button rather than a
+    link, because activating it reveals the source in place instead of navigating away.
+*@
+
+<button type="button"
+        class="bai-cite"
+        title="@Tooltip"
+        aria-label="@($"Source {Citation.Number}: {Citation.Source.Title}")"
+        @onclick="ActivateAsync">
+    @Citation.Number
+</button>
+
+@code {
+    /// <summary>The citation this marker points at.</summary>
+    [Parameter, EditorRequired]
+    public Citation Citation { get; set; } = default!;
+
+    /// <summary>Raised when the user activates the marker.</summary>
+    [Parameter]
+    public EventCallback<Citation> OnActivate { get; set; }
+
+    private string Tooltip => Citation.Quote is { Length: > 0 } quote
+        ? $"{Citation.Source.Title}\n\n{Truncate(quote)}"
+        : Citation.Source.Title;
+
+    private Task ActivateAsync() => OnActivate.InvokeAsync(Citation);
+
+    private static string Truncate(string value) =>
+        value.Length <= 220 ? value : string.Concat(value.AsSpan(0, 220).TrimEnd(), "...");
+}

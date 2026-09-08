@@ -1,0 +1,67 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    What an empty conversation shows. Suggestions matter more than the heading: an empty box is the
+    hardest part of a chat product, and three concrete examples solve it.
+*@
+
+<div class="bai-empty">
+    @if (Icon is not null)
+    {
+        @Icon
+    }
+    else
+    {
+        <AiIcon Name="sparkle" Class="bai-icon" />
+    }
+
+    <div class="bai-empty__title">@(Title ?? Strings.EmptyTitle)</div>
+
+    @if (ChildContent is not null)
+    {
+        @ChildContent
+    }
+    else
+    {
+        <div>@(Body ?? Strings.EmptyBody)</div>
+    }
+
+    @if (Suggestions is { Count: > 0 })
+    {
+        <div class="bai-suggestions">
+            @foreach (var suggestion in Suggestions)
+            {
+                <button type="button" class="bai-suggestion" @onclick="() => OnSuggestion.InvokeAsync(suggestion)">
+                    @suggestion
+                </button>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    /// <summary>The heading.</summary>
+    [Parameter]
+    public string? Title { get; set; }
+
+    /// <summary>The supporting line under the heading.</summary>
+    [Parameter]
+    public string? Body { get; set; }
+
+    /// <summary>Replaces the default icon.</summary>
+    [Parameter]
+    public RenderFragment? Icon { get; set; }
+
+    /// <summary>Replaces the body.</summary>
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>Example prompts offered as one-tap starters.</summary>
+    [Parameter]
+    public IReadOnlyList<string>? Suggestions { get; set; }
+
+    /// <summary>Raised when a suggestion is chosen.</summary>
+    [Parameter]
+    public EventCallback<string> OnSuggestion { get; set; }
+}

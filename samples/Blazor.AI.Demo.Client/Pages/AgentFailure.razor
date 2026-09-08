@@ -1,0 +1,28 @@
+@page "/agent-failure"
+
+<DemoPage Title="Agent failure"
+          Summary="A step that fails, with the failure attached to the step rather than replacing the whole run.">
+    <ChildContent>
+        <AiChat Session="_session"
+                EmptyTitle="Ship the release"
+                Suggestions="@(new[] { "Deploy the current branch" })" />
+    </ChildContent>
+
+    <Aside>
+        <h3>Where the failure lives</h3>
+        <p>
+            The failing step keeps its own error, the completed steps keep their summaries, and the
+            run is marked failed. Nothing that already succeeded is lost, which is what lets the
+            answer explain what happened rather than just reporting that something did.
+        </p>
+        <p class="demo__note">
+            A non-terminal error can also be added as an <code>ErrorPart</code> inside a message,
+            for the common case where one of several parallel calls failed and the rest are still
+            worth showing.
+        </p>
+    </Aside>
+</DemoPage>
+
+@code {
+    private readonly ChatSession _session = new(DemoAgentTransports.Fails());
+}

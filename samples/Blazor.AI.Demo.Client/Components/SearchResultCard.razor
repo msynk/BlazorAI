@@ -1,0 +1,79 @@
+@namespace Blazor.AI.Demo.Client.Components
+
+@*
+    A custom renderer for one tool. Registered against the tool name, it replaces the default card
+    for that tool only, everywhere it appears.
+*@
+
+<div class="bai-panel" style="border-color:var(--bai-color-accent)">
+    <div class="bai-panel__header" style="cursor:default">
+        <span class="bai-panel__title">
+            @if (Call.Status is ToolCallStatus.Completed)
+            {
+                <text>Searched the documentation</text>
+            }
+            else
+            {
+                <text>Searching the documentation</text>
+            }
+        </span>
+        @if (Call.Duration is { } duration)
+        {
+            <span class="bai-chip">@($"{duration.TotalMilliseconds:F0}ms")</span>
+        }
+    </div>
+
+    <div class="bai-panel__body">
+        @if (Query is { Length: > 0 } query)
+        {
+            <div style="margin-bottom:var(--bai-space-2)">
+                <strong>@query</strong>
+            </div>
+        }
+
+        @if (Hits is { } hits)
+        {
+            <ul style="margin:0;padding-left:1.1rem">
+                @foreach (var hit in hits.EnumerateArray())
+                {
+                    <li>
+                        @(hit.TryGetProperty("title", out var title) ? title.GetString() : null)
+                        <span class="bai-chip">@(hit.TryGetProperty("score", out var score) && score.TryGetDouble(out var value) ? value.ToString("P0") : null)</span>
+                    </li>
+                }
+            </ul>
+        }
+        else if (Call.Progress is { } progress)
+        {
+            <div class="bai-tool__status">@progress.Message</div>
+            <div class="bai-progress">
+                <div class="bai-progress__bar" style="width:@($"{(progress.Fraction ?? 0) * 100:0}%")"></div>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    /// <summary>The call being rendered.</summary>
+    [Parameter, EditorRequired]
+    public ToolCallPart Call { get; set; } = default!;
+
+    /// <summary>
+    /// The result rows, when the payload has the shape this card expects.
+    /// </summary>
+    /// <remarks>
+    /// Checked rather than assumed. A custom renderer is handed data a model produced, so the shape
+    /// it wants is a hope, not a guarantee.
+    /// </remarks>
+    private JsonElement? Hits => Call.Result?.Value is { } value
+        && value.ValueKind is JsonValueKind.Object
+        && value.TryGetProperty("hits", out var hits)
+        && hits.ValueKind is JsonValueKind.Array
+            ? hits
+            : null;
+
+    private string? Query => Call.DisplayArguments is { } args
+        && args.TryGetProperty("query", out var value)
+            ? value.GetString()
+            : null;
+}

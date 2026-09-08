@@ -1,0 +1,274 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+@implements IDisposable
+
+@*
+    The whole chat surface in one component: transcript, composer, empty state, and the scroll
+    affordance, wired to a session.
+
+    Supply a session and it drives that one. Supply nothing and it creates one from the registered
+    transport, which is what makes a working AI chat three lines of markup. Every piece it composes
+    is public, so anything this component does can also be assembled by hand.
+*@
+
+<CascadingValue Value="Options" IsFixed="false">
+    <div class="bai @DensityClass bai-chat @Class" @attributes="Attributes">
+        @if (HeaderContent is not null)
+        {
+            @HeaderContent
+        }
+
+        <MessageList @ref="_list"
+                     Conversation="ActiveConversation"
+                     Session="ActiveSession"
+                     MessageTemplate="MessageTemplate"
+                     HideSystemMessages="HideSystemMessages"
+                     PinnedChanged="OnPinnedChanged"
+                     OnCitationClick="OnCitationClick"
+                     Header="ListHeader"
+                     Footer="ListFooter">
+            <EmptyContent>
+                @if (EmptyContent is not null)
+                {
+                    @EmptyContent
+                }
+                else
+                {
+                    <EmptyState Title="@EmptyTitle"
+                                Body="@EmptyBody"
+                                Suggestions="Suggestions"
+                                OnSuggestion="SubmitTextAsync" />
+                }
+            </EmptyContent>
+        </MessageList>
+
+        <ScrollToLatest Visible="@(!_pinned)" OnClick="ScrollToLatestAsync" />
+
+        <div class="bai-chat__footer">
+            <div class="bai-chat__footer-inner">
+                @if (ComposerContent is not null)
+                {
+                    @ComposerContent
+                }
+                else
+                {
+                    <PromptInput @ref="_composer"
+                                 Session="ActiveSession"
+                                 Placeholder="@Placeholder"
+                                 AllowAttachments="AllowAttachments"
+                                 AllowDictation="AllowDictation"
+                                 Commands="Commands"
+                                 Mentions="Mentions"
+                                 Leading="ComposerLeading"
+                                 Trailing="ComposerTrailing"
+                                 Hint="ComposerHint"
+                                 OnSubmit="OnComposerSubmitAsync" />
+                }
+
+                @if (FooterContent is not null)
+                {
+                    @FooterContent
+                }
+            </div>
+        </div>
+    </div>
+</CascadingValue>
+
+@code {
+    private MessageList? _list;
+    private PromptInput? _composer;
+    private ChatSession? _owned;
+    private ChatSession? _attached;
+    private bool _pinned = true;
+
+    /// <summary>The session to drive. When unset, one is created from the registered transport.</summary>
+    [Parameter]
+    public ChatSession? Session { get; set; }
+
+    /// <summary>
+    /// The conversation to show. Used only when no session is supplied; otherwise the session owns it.
+    /// </summary>
+    [Parameter]
+    public Conversation? Conversation { get; set; }
+
+    /// <summary>Settings for a session this component creates.</summary>
+    [Parameter]
+    public ChatSessionOptions? SessionOptions { get; set; }
+
+    /// <summary>Presentation settings for everything inside this chat.</summary>
+    [Parameter]
+    public AiUiOptions? UiOptions { get; set; }
+
+    /// <summary>
+    /// Raised when the user submits. Handle it to submit yourself, for example after uploading
+    /// attachments; leave it unset and the chat submits to the session.
+    /// </summary>
+    [Parameter]
+    public EventCallback<PromptInput.PromptSubmission> OnSubmit { get; set; }
+
+    /// <summary>Raised when the user activates a citation.</summary>
+    [Parameter]
+    public EventCallback<Citation> OnCitationClick { get; set; }
+
+    /// <summary>Replaces how a message is rendered.</summary>
+    [Parameter]
+    public RenderFragment<AiMessage>? MessageTemplate { get; set; }
+
+    /// <summary>Content above the transcript, outside the scroll area.</summary>
+    [Parameter]
+    public RenderFragment? HeaderContent { get; set; }
+
+    /// <summary>Content below the composer.</summary>
+    [Parameter]
+    public RenderFragment? FooterContent { get; set; }
+
+    /// <summary>Content at the top of the scroll area, above the first message.</summary>
+    [Parameter]
+    public RenderFragment? ListHeader { get; set; }
+
+    /// <summary>Content at the bottom of the scroll area, below the last message.</summary>
+    [Parameter]
+    public RenderFragment? ListFooter { get; set; }
+
+    /// <summary>Replaces the empty state.</summary>
+    [Parameter]
+    public RenderFragment? EmptyContent { get; set; }
+
+    /// <summary>Replaces the whole composer.</summary>
+    [Parameter]
+    public RenderFragment? ComposerContent { get; set; }
+
+    /// <summary>Content placed before the composer textarea, such as a model picker.</summary>
+    [Parameter]
+    public RenderFragment? ComposerLeading { get; set; }
+
+    /// <summary>Content placed beside the send button.</summary>
+    [Parameter]
+    public RenderFragment? ComposerTrailing { get; set; }
+
+    /// <summary>A hint rendered under the composer.</summary>
+    [Parameter]
+    public RenderFragment? ComposerHint { get; set; }
+
+    /// <summary>Heading for the empty state.</summary>
+    [Parameter]
+    public string? EmptyTitle { get; set; }
+
+    /// <summary>Body for the empty state.</summary>
+    [Parameter]
+    public string? EmptyBody { get; set; }
+
+    /// <summary>Example prompts offered in the empty state.</summary>
+    [Parameter]
+    public IReadOnlyList<string>? Suggestions { get; set; }
+
+    /// <summary>Placeholder for the composer.</summary>
+    [Parameter]
+    public string? Placeholder { get; set; }
+
+    /// <summary>Offer attachments in the composer.</summary>
+    [Parameter]
+    public bool AllowAttachments { get; set; } = true;
+
+    /// <summary>Offer dictation in the composer.</summary>
+    [Parameter]
+    public bool AllowDictation { get; set; }
+
+    /// <summary>Hide system messages from the transcript.</summary>
+    [Parameter]
+    public bool HideSystemMessages { get; set; } = true;
+
+    /// <summary>Commands offered when the user types a forward slash.</summary>
+    [Parameter]
+    public IReadOnlyList<SlashCommand>? Commands { get; set; }
+
+    /// <summary>Items offered when the user types an at sign.</summary>
+    [Parameter]
+    public IReadOnlyList<MentionItem>? Mentions { get; set; }
+
+    /// <summary>Extra CSS classes.</summary>
+    [Parameter]
+    public string? Class { get; set; }
+
+    /// <summary>Any other attributes, splatted onto the root element.</summary>
+    [Parameter(CaptureUnmatchedValues = true)]
+    public IReadOnlyDictionary<string, object>? Attributes { get; set; }
+
+    [Inject]
+    private IServiceProvider Services { get; set; } = default!;
+
+    /// <summary>The session in use, whether supplied or created here.</summary>
+    public ChatSession ActiveSession => Session ?? (_owned ??= CreateSession());
+
+    /// <summary>The conversation in use.</summary>
+    public Conversation ActiveConversation => ActiveSession.Conversation;
+
+    private string DensityClass => Options.Density is AiDensity.Compact ? "bai-density-compact" : string.Empty;
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        if (UiOptions is not null) CascadedOptions = UiOptions;
+
+        var session = ActiveSession;
+        if (ReferenceEquals(_attached, session)) return;
+
+        if (_attached is not null) _attached.StateChanged -= OnSessionStateChanged;
+        _attached = session;
+        _attached.StateChanged += OnSessionStateChanged;
+    }
+
+    private ChatSession CreateSession()
+    {
+        if (Services.GetService(typeof(ChatSessionFactory)) is ChatSessionFactory factory)
+        {
+            return factory.Create(Conversation, SessionOptions);
+        }
+
+        if (Services.GetService(typeof(IAiTransport)) is IAiTransport transport)
+        {
+            return new ChatSession(transport, Conversation, SessionOptions);
+        }
+
+        throw new InvalidOperationException(
+            "AiChat needs a session or a registered IAiTransport. Call services.AddBlazorAI().UseTransport<T>() " +
+            "during startup, or pass a Session parameter.");
+    }
+
+    private void OnSessionStateChanged() => RequestRender();
+
+    private void OnPinnedChanged(bool pinned)
+    {
+        _pinned = pinned;
+        RequestRender();
+    }
+
+    private Task ScrollToLatestAsync() => _list?.ScrollToLatestAsync() ?? Task.CompletedTask;
+
+    private async Task OnComposerSubmitAsync(PromptInput.PromptSubmission submission)
+    {
+        if (OnSubmit.HasDelegate)
+        {
+            await OnSubmit.InvokeAsync(submission);
+            return;
+        }
+
+        await ActiveSession.SubmitAsync(submission.Text, submission.Attachments);
+    }
+
+    private Task SubmitTextAsync(string text) => OnComposerSubmitAsync(new PromptInput.PromptSubmission(text, []));
+
+    /// <summary>Puts the caret in the composer.</summary>
+    /// <returns>A task that completes once focus has been requested.</returns>
+    public ValueTask FocusComposerAsync() => _composer?.FocusAsync() ?? ValueTask.CompletedTask;
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        if (_attached is not null) _attached.StateChanged -= OnSessionStateChanged;
+        _attached = null;
+
+        if (_owned is not null) _ = _owned.DisposeAsync().AsTask();
+        _owned = null;
+    }
+}

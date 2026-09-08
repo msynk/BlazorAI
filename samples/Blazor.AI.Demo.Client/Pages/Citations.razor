@@ -1,0 +1,41 @@
+@page "/citations"
+
+<DemoPage Title="Citations"
+          Summary="Numbered markers placed exactly where the claim is made, and a deduplicated source list under the answer.">
+    <ChildContent>
+        <AiChat Session="_session"
+                EmptyTitle="Ask about render modes"
+                Suggestions="@(new[] { "What happens to state when a circuit drops?" })"
+                OnCitationClick="OnCitationClicked" />
+    </ChildContent>
+
+    <Aside>
+        <h3>Anchored, not appended</h3>
+        <p>
+            A <code>Citation</code> carries character offsets into the text it supports. The renderer
+            inserts a marker at each offset before parsing, so the superscript lands mid-sentence
+            instead of being collected into a footnote nobody connects to anything.
+        </p>
+        <p>
+            Offsets that reach past the text received so far are held back, so a marker never appears
+            in the wrong sentence while streaming.
+        </p>
+
+        @if (_selected is { } citation)
+        {
+            <h3>Selected source</h3>
+            <SourceCard Source="citation.Source" Number="citation.Number" />
+            @if (citation.Quote is { Length: > 0 } quote)
+            {
+                <blockquote class="demo__note">@quote</blockquote>
+            }
+        }
+    </Aside>
+</DemoPage>
+
+@code {
+    private readonly ChatSession _session = new(DemoContentTransports.Cited());
+    private Citation? _selected;
+
+    private void OnCitationClicked(Citation citation) => _selected = citation;
+}

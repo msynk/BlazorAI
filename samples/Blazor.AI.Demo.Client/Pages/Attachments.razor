@@ -1,0 +1,37 @@
+@page "/attachments"
+
+<DemoPage Title="Attachments"
+          Summary="Pick, drag, or paste files into the composer. Images preview; everything else gets a card.">
+    <ChildContent>
+        <AiChat Session="_session"
+                AllowAttachments="true"
+                AllowDictation="true"
+                EmptyTitle="Attach something"
+                EmptyBody="Drag a file onto the composer, paste a screenshot, or use the paperclip." />
+    </ChildContent>
+
+    <Aside>
+        <h3>Three ways in</h3>
+        <ul>
+            <li>The picker, through <code>InputFile</code>.</li>
+            <li>Drag and drop onto the composer, which highlights while a drag is over it.</li>
+            <li>Paste, which is how screenshots actually arrive.</li>
+        </ul>
+        <p>
+            This demo keeps content inline as a data URL, which suits screenshots. An application
+            that accepts large uploads handles <code>OnSubmit</code>, uploads to its own storage, and
+            attaches a URL instead, so nothing large is ever held in circuit memory.
+        </p>
+        <p class="demo__note">
+            The microphone appears only when the browser can transcribe. No audio leaves the device.
+        </p>
+    </Aside>
+</DemoPage>
+
+@code {
+    private ChatSession? _session;
+
+    [Inject] private ChatSessionFactory Sessions { get; set; } = default!;
+
+    protected override void OnInitialized() => _session = Sessions.Create();
+}

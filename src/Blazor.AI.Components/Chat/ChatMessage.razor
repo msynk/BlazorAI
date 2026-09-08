@@ -1,0 +1,176 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+@implements IDisposable
+
+@*
+    One message, laid out by role: user turns as a right-aligned bubble, assistant turns as full
+    width prose, system notes as a centred pill.
+
+    Subscribes to the message for structural changes only. Content changes inside a part are handled
+    by that part's own component, so a streaming token does not re-render this subtree.
+*@
+
+<article class="bai-message bai-message--@Message.Role.Value.ToLowerInvariant() @(Animate ? "bai-message__enter" : null)"
+         id="@($"bai-msg-{Message.MessageId}")"
+         data-message-id="@Message.MessageId"
+         aria-busy="@(Message.IsBusy ? "true" : "false")">
+
+    @if (Message.Role.IsSystem)
+    {
+        <div class="bai-message__system">@Message.GetText()</div>
+    }
+    else if (Message.Role.IsUser)
+    {
+        @if (Message.Attachments.Count > 0)
+        {
+            <div class="bai-attachments" style="justify-content:flex-end">
+                @foreach (var attachment in Message.Attachments)
+                {
+                    <AttachmentChip Attachment="attachment" @key="attachment.AttachmentId" />
+                }
+            </div>
+        }
+
+        @if (_editing)
+        {
+            <div class="bai-composer" style="width:100%">
+                <textarea class="bai-composer__textarea" rows="3" @bind="_draft" @bind:event="oninput"></textarea>
+                <div class="bai-form__actions">
+                    <button type="button" class="bai-btn" @onclick="() => _editing = false">@Strings.Cancel</button>
+                    <button type="button" class="bai-btn bai-btn--primary" @onclick="SaveEditAsync">@Strings.Save</button>
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="bai-message__bubble">@Message.GetText()</div>
+            @if (Options.ShowMessageActions && Session is not null)
+            {
+                <div class="bai-message__actions">
+                    <CopyButton Content="@Message.GetText()" />
+                    <button type="button" class="bai-btn bai-btn--icon" title="@Strings.Edit" @onclick="StartEdit">
+                        <AiIcon Name="edit" />
+                    </button>
+                </div>
+            }
+        }
+    }
+    else
+    {
+        <div class="bai-message__body">
+            @if (Message.Run is { } run)
+            {
+                <AgentRunView Run="run" Session="Session" />
+            }
+
+            @if (Message.StatusText is { Length: > 0 } status)
+            {
+                <ThinkingIndicator Label="@status" />
+            }
+            else if (Message.Status is MessageStatus.Pending && Message.Parts.Count == 0)
+            {
+                <ThinkingIndicator />
+            }
+
+            @foreach (var part in Message.Parts)
+            {
+                <MessagePartView Part="part"
+                                 Message="Message"
+                                 Conversation="Conversation"
+                                 Session="Session"
+                                 OnCitationClick="OnCitationClick"
+                                 @key="part.PartId" />
+            }
+
+            @if (Message.Error is { } error)
+            {
+                <ErrorView Error="error" OnRetry="RetryAsync" />
+            }
+
+            @if (Options.ShowSourceList && Message.Citations.Count > 0
+                 && !Message.Parts.Any(p => p is SourcesPart))
+            {
+                <SourceList Citations="Message.Citations" OnSourceClick="OnSourceClick" />
+            }
+
+            @if (ChildContent is not null)
+            {
+                @ChildContent
+            }
+        </div>
+
+        @if (!Message.IsBusy)
+        {
+            <MessageActions Message="Message" Session="Session" />
+        }
+    }
+</article>
+
+@code {
+    private bool _editing;
+    private string _draft = string.Empty;
+    private AiMessage? _subscribed;
+
+    /// <summary>The message to render.</summary>
+    [Parameter, EditorRequired]
+    public AiMessage Message { get; set; } = default!;
+
+    /// <summary>The conversation it belongs to, used to resolve artifacts.</summary>
+    [Parameter]
+    public Conversation? Conversation { get; set; }
+
+    /// <summary>The session driving the conversation, which enables edit, retry, and approval.</summary>
+    [Parameter]
+    public ChatSession? Session { get; set; }
+
+    /// <summary>Play the entrance animation. Off for messages restored from history.</summary>
+    [Parameter]
+    public bool Animate { get; set; }
+
+    /// <summary>Extra content rendered at the end of an assistant message.</summary>
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>Raised when the user activates a citation.</summary>
+    [Parameter]
+    public EventCallback<Citation> OnCitationClick { get; set; }
+
+    /// <summary>Raised when the user activates a source card.</summary>
+    [Parameter]
+    public EventCallback<CitationSource> OnSourceClick { get; set; }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        if (ReferenceEquals(_subscribed, Message)) return;
+        if (_subscribed is not null) _subscribed.Changed -= OnMessageChanged;
+        _subscribed = Message;
+        _subscribed.Changed += OnMessageChanged;
+    }
+
+    private void OnMessageChanged(AiMessage message) => RequestRender();
+
+    private void StartEdit()
+    {
+        _draft = Message.GetText();
+        _editing = true;
+    }
+
+    private async Task SaveEditAsync()
+    {
+        _editing = false;
+        if (Session is not null) await Session.EditAsync(Message.MessageId, _draft);
+    }
+
+    private async Task RetryAsync()
+    {
+        if (Session is not null) await Session.RetryAsync();
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        if (_subscribed is not null) _subscribed.Changed -= OnMessageChanged;
+        _subscribed = null;
+    }
+}

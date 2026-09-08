@@ -1,0 +1,66 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    One attachment: a thumbnail for images, an icon otherwise, plus upload state when it is still
+    arriving.
+*@
+
+<div class="bai-attachment @(Attachment.Status is AttachmentStatus.Failed ? "bai-attachment--failed" : null)">
+    @if (Attachment.Kind is AttachmentKind.Image && (Attachment.ThumbnailUrl ?? Attachment.Url) is { } preview)
+    {
+        <img class="bai-attachment__thumb" src="@preview" alt="" loading="lazy" />
+    }
+    else
+    {
+        <span class="bai-attachment__thumb">
+            <AiIcon Name="@IconName" />
+        </span>
+    }
+
+    <div style="min-width:0">
+        <div class="bai-attachment__name" title="@Attachment.Name">@Attachment.Name</div>
+        <div class="bai-attachment__size">
+            @if (Attachment.Status is AttachmentStatus.Uploading)
+            {
+                <span>@($"{(Attachment.Progress ?? 0) * 100:0}%")</span>
+            }
+            else if (Attachment.Status is AttachmentStatus.Failed)
+            {
+                <span>@(Attachment.Error ?? "Upload failed")</span>
+            }
+            else if (Attachment.Size is { } size)
+            {
+                <span>@Strings.FormatBytes(size)</span>
+            }
+        </div>
+    </div>
+
+    @if (OnRemove.HasDelegate)
+    {
+        <button type="button"
+                class="bai-btn bai-btn--icon"
+                aria-label="@($"{Strings.Remove} {Attachment.Name}")"
+                @onclick="() => OnRemove.InvokeAsync(Attachment)">
+            <AiIcon Name="close" />
+        </button>
+    }
+</div>
+
+@code {
+    /// <summary>The attachment to render.</summary>
+    [Parameter, EditorRequired]
+    public Attachment Attachment { get; set; } = default!;
+
+    /// <summary>Raised when the user removes it. The remove button is hidden when unset.</summary>
+    [Parameter]
+    public EventCallback<Attachment> OnRemove { get; set; }
+
+    private string IconName => Attachment.Kind switch
+    {
+        AttachmentKind.Image => "image",
+        AttachmentKind.Audio => "mic",
+        AttachmentKind.Video => "image",
+        _ => "file",
+    };
+}

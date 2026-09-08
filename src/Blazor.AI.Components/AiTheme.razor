@@ -1,0 +1,81 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    Cascades presentation settings and applies a theme to everything inside it.
+
+    Wrap a page or an application region to change tokens, density, or the string table for that
+    region only. Nesting works: an inner provider overrides the outer one.
+*@
+
+<CascadingValue Value="_effective" IsFixed="false">
+    <div class="bai @DensityClass @Class"
+         data-bai-theme="@(Theme is AiThemeMode.System ? null : Theme.ToString().ToLowerInvariant())"
+         style="@Style"
+         @attributes="Attributes">
+        @ChildContent
+    </div>
+</CascadingValue>
+
+@code {
+    private AiUiOptions _effective = AiUiOptions.Default;
+
+    /// <summary>The settings to cascade. Falls back to the registered defaults.</summary>
+    [Parameter]
+    public AiUiOptions? UiOptions { get; set; }
+
+    /// <summary>Which colour scheme to force.</summary>
+    [Parameter]
+    public AiThemeMode Theme { get; set; } = AiThemeMode.System;
+
+    /// <summary>Overrides the density independently of the rest of the settings.</summary>
+    [Parameter]
+    public AiDensity? Density { get; set; }
+
+    /// <summary>Inline styles, the usual place to override design tokens for one region.</summary>
+    [Parameter]
+    public string? Style { get; set; }
+
+    /// <summary>Extra CSS classes.</summary>
+    [Parameter]
+    public string? Class { get; set; }
+
+    /// <summary>The content to theme.</summary>
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>Any other attributes, splatted onto the root element.</summary>
+    [Parameter(CaptureUnmatchedValues = true)]
+    public IReadOnlyDictionary<string, object>? Attributes { get; set; }
+
+    [Inject]
+    private IServiceProvider Services { get; set; } = default!;
+
+    private string DensityClass => _effective.Density is AiDensity.Compact ? "bai-density-compact" : string.Empty;
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        var baseOptions = UiOptions
+            ?? CascadedOptions
+            ?? Services.GetService(typeof(AiUiOptions)) as AiUiOptions
+            ?? AiUiOptions.Default;
+
+        _effective = Density is { } density ? baseOptions with { Density = density } : baseOptions;
+    }
+}
+
+@code {
+    /// <summary>Which colour scheme to use.</summary>
+    public enum AiThemeMode
+    {
+        /// <summary>Follow the operating system preference.</summary>
+        System = 0,
+
+        /// <summary>Always light.</summary>
+        Light = 1,
+
+        /// <summary>Always dark.</summary>
+        Dark = 2,
+    }
+}

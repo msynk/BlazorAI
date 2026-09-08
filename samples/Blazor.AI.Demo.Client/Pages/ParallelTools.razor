@@ -1,0 +1,33 @@
+@page "/parallel-tools"
+
+<DemoPage Title="Parallel tools"
+          Summary="Two calls in flight at once, each with its own card, status, and timing.">
+    <ChildContent>
+        <AiChat Session="_session"
+                EmptyTitle="Compare two cities"
+                Suggestions="@(new[] { "Compare the weather in Oslo and Lisbon" })" />
+    </ChildContent>
+
+    <Aside>
+        <h3>Concurrent by default</h3>
+        <p>
+            The session executes every call the model asked for in one round concurrently and waits
+            for all of them before asking again. Each card updates independently, because each
+            <code>ToolCallPart</code> raises its own change event and only its own component
+            re-renders.
+        </p>
+        <p class="demo__note">
+            A rejected or failed call does not stop the others. Its failure is recorded on that call
+            and sent back to the model with the rest.
+        </p>
+    </Aside>
+</DemoPage>
+
+@code {
+    private ChatSession? _session;
+
+    [Inject] private IToolRegistry Tools { get; set; } = default!;
+
+    protected override void OnInitialized() =>
+        _session = new ChatSession(DemoToolTransports.CallsTwoTools(), tools: Tools);
+}

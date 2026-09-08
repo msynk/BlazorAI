@@ -1,0 +1,95 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    The sidebar list of conversations, grouped by recency the way people actually think about them:
+    today, yesterday, this week, then by month.
+*@
+
+<nav class="bai-conversations @Class" aria-label="Conversations">
+    @if (ShowNewButton)
+    {
+        <button type="button" class="bai-conversation" @onclick="OnNew">
+            <AiIcon Name="plus" />
+            <span class="bai-conversation__title">@Strings.NewConversation</span>
+        </button>
+    }
+
+    @foreach (var group in Grouped())
+    {
+        <div class="bai-menu__group">@group.Key</div>
+        @foreach (var summary in group)
+        {
+            <div style="display:flex;align-items:center">
+                <button type="button"
+                        class="bai-conversation @(summary.ConversationId == SelectedId ? "bai-conversation--active" : null)"
+                        aria-current="@(summary.ConversationId == SelectedId ? "true" : null)"
+                        title="@summary.Preview"
+                        @onclick="() => OnSelect.InvokeAsync(summary)">
+                    <span class="bai-conversation__title">@(summary.Title ?? Strings.Untitled)</span>
+                </button>
+                @if (OnDelete.HasDelegate)
+                {
+                    <button type="button"
+                            class="bai-btn bai-btn--icon"
+                            title="@Strings.Delete"
+                            aria-label="@($"{Strings.Delete} {summary.Title ?? Strings.Untitled}")"
+                            @onclick="() => OnDelete.InvokeAsync(summary)">
+                        <AiIcon Name="trash" />
+                    </button>
+                }
+            </div>
+        }
+    }
+</nav>
+
+@code {
+    /// <summary>The conversations to list.</summary>
+    [Parameter]
+    public IReadOnlyList<ConversationSummary>? Conversations { get; set; }
+
+    /// <summary>The identifier of the conversation currently open.</summary>
+    [Parameter]
+    public string? SelectedId { get; set; }
+
+    /// <summary>Raised when a conversation is chosen.</summary>
+    [Parameter]
+    public EventCallback<ConversationSummary> OnSelect { get; set; }
+
+    /// <summary>Raised when a conversation is deleted. The delete button is hidden when unset.</summary>
+    [Parameter]
+    public EventCallback<ConversationSummary> OnDelete { get; set; }
+
+    /// <summary>Raised when the new-conversation button is pressed.</summary>
+    [Parameter]
+    public EventCallback OnNew { get; set; }
+
+    /// <summary>Show the new-conversation button at the top.</summary>
+    [Parameter]
+    public bool ShowNewButton { get; set; } = true;
+
+    /// <summary>Extra CSS classes.</summary>
+    [Parameter]
+    public string? Class { get; set; }
+
+    private IEnumerable<IGrouping<string, ConversationSummary>> Grouped()
+    {
+        var now = DateTimeOffset.Now;
+        return (Conversations ?? [])
+            .OrderByDescending(c => c.UpdatedAt)
+            .GroupBy(c => Bucket(now, c.UpdatedAt));
+    }
+
+    private static string Bucket(DateTimeOffset now, DateTimeOffset updated)
+    {
+        var age = now.Date - updated.LocalDateTime.Date;
+        return age.TotalDays switch
+        {
+            < 1 => "Today",
+            < 2 => "Yesterday",
+            < 7 => "Previous 7 days",
+            < 30 => "Previous 30 days",
+            _ => updated.LocalDateTime.ToString("MMMM yyyy"),
+        };
+    }
+}

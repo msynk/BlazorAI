@@ -1,0 +1,55 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    The prompt shown when a tool call needs a human decision.
+
+    Three choices rather than two: allowing once and allowing always are meaningfully different, and
+    collapsing them into one button forces users to either re-approve constantly or grant more than
+    they meant to.
+*@
+
+<div class="bai-approval" role="group" aria-label="@Strings.ApproveTool(DisplayName)">
+    <div class="bai-approval__text">
+        @if (Call.ApprovalReason is { Length: > 0 } reason)
+        {
+            @reason
+        }
+        else
+        {
+            @Strings.ApproveTool(DisplayName)
+        }
+    </div>
+    <button type="button" class="bai-btn bai-btn--outline" @onclick="() => DecideAsync(ApprovalDecision.Rejected)">
+        @Strings.Reject
+    </button>
+    <button type="button" class="bai-btn bai-btn--outline" @onclick="() => DecideAsync(ApprovalDecision.ApprovedAlways)">
+        @Strings.ApproveAlways
+    </button>
+    <button type="button" class="bai-btn bai-btn--primary" @onclick="() => DecideAsync(ApprovalDecision.Approved)">
+        @Strings.Approve
+    </button>
+</div>
+
+@code {
+    /// <summary>The call awaiting a decision.</summary>
+    [Parameter, EditorRequired]
+    public ToolCallPart Call { get; set; } = default!;
+
+    /// <summary>The session that is waiting. Required for the decision to take effect.</summary>
+    [Parameter]
+    public ChatSession? Session { get; set; }
+
+    /// <summary>Raised after a decision, whether or not a session was supplied.</summary>
+    [Parameter]
+    public EventCallback<ApprovalDecision> OnDecision { get; set; }
+
+    private string DisplayName => Call.Definition?.DisplayName ?? Call.ToolName;
+
+    private async Task DecideAsync(ApprovalDecision decision)
+    {
+        Session?.Approve(Call.ToolCallId, decision);
+        if (Session is null) Call.SetApproval(decision);
+        await OnDecision.InvokeAsync(decision);
+    }
+}

@@ -1,0 +1,186 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+@inject AiRendererRegistry Renderers
+@implements IDisposable
+
+@*
+    A tool call as one card: what is being called, what it was given, how it is going, and what came
+    back. Collapsed by default, because most calls are plumbing the reader does not need, and
+    expanded automatically when something needs attention.
+*@
+
+@if (_custom is not null)
+{
+    <RendererBoundary Label="@($"The renderer for '{Call.ToolName}' failed")">
+        @_custom
+    </RendererBoundary>
+}
+else
+{
+    <div class="bai-panel bai-tool @StatusClass @(_open ? "bai-panel--open" : null)">
+        <button type="button"
+                class="bai-panel__header"
+                aria-expanded="@(_open ? "true" : "false")"
+                @onclick="() => _open = !_open">
+            <AiIcon Name="chevron-right" Class="bai-panel__chevron" />
+            <AiIcon Name="tool" />
+            <span class="bai-panel__title">@Heading</span>
+            <span class="bai-tool__status">
+                @if (Call.Status is ToolCallStatus.Running or ToolCallStatus.Streaming)
+                {
+                    <span class="bai-thinking__dots" aria-hidden="true">
+                        <span class="bai-thinking__dot"></span>
+                        <span class="bai-thinking__dot"></span>
+                        <span class="bai-thinking__dot"></span>
+                    </span>
+                }
+                else if (Call.Duration is { } duration)
+                {
+                    @Strings.FormatDuration(duration)
+                }
+            </span>
+        </button>
+
+        @if (Call.Progress is { } progress)
+        {
+            <div class="bai-progress @(progress.Fraction is null ? "bai-progress--indeterminate" : null)"
+                 role="progressbar"
+                 aria-valuenow="@(progress.Fraction is { } f ? (int)(f * 100) : null)"
+                 aria-valuemin="0"
+                 aria-valuemax="100"
+                 aria-label="@progress.Message">
+                <div class="bai-progress__bar" style="width:@(progress.Fraction is { } value ? $"{value * 100:0}%" : "35%")"></div>
+            </div>
+        }
+
+        @if (_open)
+        {
+            <div class="bai-panel__body">
+                @if (Call.Progress?.Message is { Length: > 0 } status)
+                {
+                    <div class="bai-tool__status">@status</div>
+                }
+
+                <div class="bai-tool__section">
+                    <div class="bai-tool__label">@Strings.Arguments</div>
+                    @if (Call.DisplayArguments is { } arguments)
+                    {
+                        <JsonView Value="arguments" />
+                    }
+                    else
+                    {
+                        <div class="bai-json__row">@Call.RawArguments</div>
+                    }
+                </div>
+
+                @if (Call.Result is { } result)
+                {
+                    <div class="bai-tool__section">
+                        <div class="bai-tool__label">@Strings.Result</div>
+                        @if (!result.IsSuccess && result.Error is { } error)
+                        {
+                            <ErrorView Error="error" Compact="true" />
+                        }
+                        else if (result.Text is { Length: > 0 } resultText)
+                        {
+                            <div class="bai-json__row">@resultText</div>
+                        }
+                        else if (result.Value is { } value)
+                        {
+                            <JsonView Value="value" />
+                        }
+                    </div>
+                }
+            </div>
+        }
+
+        @if (Call.Status is ToolCallStatus.AwaitingApproval)
+        {
+            <ToolApproval Call="Call" Session="Session" />
+        }
+    </div>
+}
+
+@code {
+    private RenderFragment? _custom;
+    private ToolCallPart? _subscribed;
+    private bool _open;
+    private bool _initialised;
+    private ToolCallStatus _lastStatus = ToolCallStatus.Streaming;
+
+    /// <summary>The call to render.</summary>
+    [Parameter, EditorRequired]
+    public ToolCallPart Call { get; set; } = default!;
+
+    /// <summary>The message the call belongs to.</summary>
+    [Parameter]
+    public AiMessage? Message { get; set; }
+
+    /// <summary>The session driving the conversation, used for approval decisions.</summary>
+    [Parameter]
+    public ChatSession? Session { get; set; }
+
+    private string DisplayName => Call.Definition?.DisplayName ?? Call.ToolName;
+
+    private string Heading => Call.Status switch
+    {
+        ToolCallStatus.Failed => Strings.ToolFailed(DisplayName),
+        ToolCallStatus.Completed => Strings.CalledTool(DisplayName),
+        ToolCallStatus.AwaitingApproval => Strings.ApproveTool(DisplayName),
+        ToolCallStatus.Rejected => Strings.ToolFailed(DisplayName),
+        _ => Strings.CallingTool(DisplayName),
+    };
+
+    private string? StatusClass => Call.Status switch
+    {
+        ToolCallStatus.Running or ToolCallStatus.Streaming => "bai-tool--running",
+        ToolCallStatus.Failed or ToolCallStatus.Rejected => "bai-tool--failed",
+        ToolCallStatus.AwaitingApproval => "bai-tool--approval",
+        _ => null,
+    };
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        // Subscribing here rather than relying on a parent re-render keeps the card correct when it
+        // is used on its own, which is how custom layouts and tests use it.
+        if (!ReferenceEquals(_subscribed, Call))
+        {
+            if (_subscribed is not null) _subscribed.Changed -= OnCallChanged;
+            _subscribed = Call;
+            _subscribed.Changed += OnCallChanged;
+        }
+
+        _custom = Renderers.FindTool(Call.ToolName)
+            ?.Invoke(new ToolCallContext(Call, Message ?? new AiMessage(AiRole.Assistant), Session));
+
+        if (!_initialised)
+        {
+            _initialised = true;
+            _open = !Options.CollapseToolCalls;
+        }
+
+        UpdateAutoExpand();
+    }
+
+    private void OnCallChanged(MessagePart part)
+    {
+        UpdateAutoExpand();
+        RequestRender();
+    }
+
+    private void UpdateAutoExpand()
+    {
+        // A failure or an approval request is not something to leave hidden behind a chevron.
+        if (_lastStatus == Call.Status) return;
+        _lastStatus = Call.Status;
+        if (Call.Status is ToolCallStatus.Failed or ToolCallStatus.AwaitingApproval) _open = true;
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        if (_subscribed is not null) _subscribed.Changed -= OnCallChanged;
+        _subscribed = null;
+    }
+}

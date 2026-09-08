@@ -1,0 +1,64 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+@implements IDisposable
+
+@*
+    One step of a run, drawn as a timeline entry so the sequence and the current position read at a
+    glance.
+*@
+
+<div class="bai-step bai-step--@Step.Status.ToString().ToLowerInvariant()">
+    <span class="bai-step__marker" aria-hidden="true">
+        @if (Step.Status is AgentStepStatus.Completed)
+        {
+            <AiIcon Name="check" Class="bai-icon" />
+        }
+    </span>
+    <div class="bai-step__body">
+        <div class="bai-step__title">
+            @Step.Title
+            @if (Step.Duration is { } duration && Step.Status is not AgentStepStatus.Running)
+            {
+                <span class="bai-chip">@Strings.FormatDuration(duration)</span>
+            }
+        </div>
+        @if (Step.Detail is { Length: > 0 } detail)
+        {
+            <div class="bai-step__summary">@detail</div>
+        }
+        @if (Step.Summary is { Length: > 0 } summary)
+        {
+            <div class="bai-step__summary">@summary</div>
+        }
+        @if (Step.Error is { } error)
+        {
+            <div class="bai-step__summary" style="color:var(--bai-color-danger)">@error.Message</div>
+        }
+    </div>
+</div>
+
+@code {
+    private AgentStep? _subscribed;
+
+    /// <summary>The step to render.</summary>
+    [Parameter, EditorRequired]
+    public AgentStep Step { get; set; } = default!;
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        if (ReferenceEquals(_subscribed, Step)) return;
+        if (_subscribed is not null) _subscribed.Changed -= OnStepChanged;
+        _subscribed = Step;
+        _subscribed.Changed += OnStepChanged;
+    }
+
+    private void OnStepChanged(AgentStep step) => RequestRender();
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        if (_subscribed is not null) _subscribed.Changed -= OnStepChanged;
+        _subscribed = null;
+    }
+}

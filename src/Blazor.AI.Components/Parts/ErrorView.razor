@@ -1,0 +1,62 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    An error the user can act on: what went wrong, a retry when retrying could help, and the
+    technical detail behind a disclosure rather than in their face.
+*@
+
+<div class="bai-error" role="alert">
+    <div class="bai-error__title">
+        <AiIcon Name="alert" />
+        <span>@(Compact ? Error.Message : Strings.SomethingWentWrong)</span>
+    </div>
+
+    @if (!Compact)
+    {
+        <div>@Error.Message</div>
+    }
+
+    @if (Error.RetryAfter is { } wait)
+    {
+        <div>Try again in @Strings.FormatDuration(wait).</div>
+    }
+
+    <div class="bai-message__meta">
+        @if (Error.IsRetryable && OnRetry.HasDelegate)
+        {
+            <button type="button" class="bai-btn bai-btn--outline" @onclick="OnRetry">
+                <AiIcon Name="refresh" />
+                <span>@Strings.Retry</span>
+            </button>
+        }
+
+        @if (Error.Detail is { Length: > 0 })
+        {
+            <button type="button" class="bai-btn" @onclick="() => _showDetail = !_showDetail">
+                @Strings.ShowDetails
+            </button>
+        }
+    </div>
+
+    @if (_showDetail && Error.Detail is { Length: > 0 } detail)
+    {
+        <div class="bai-error__detail">@detail</div>
+    }
+</div>
+
+@code {
+    private bool _showDetail;
+
+    /// <summary>The failure to show.</summary>
+    [Parameter, EditorRequired]
+    public AiError Error { get; set; } = default!;
+
+    /// <summary>Render inside another card, without the outer heading.</summary>
+    [Parameter]
+    public bool Compact { get; set; }
+
+    /// <summary>Raised when the user asks to retry. The retry button is hidden when unset.</summary>
+    [Parameter]
+    public EventCallback OnRetry { get; set; }
+}

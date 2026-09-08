@@ -1,0 +1,28 @@
+@page "/artifacts"
+
+<DemoPage Title="Artifacts"
+          Summary="A document written into its own panel, then revised on the next turn with the earlier version kept.">
+    <ChildContent>
+        <AiChat Session="_session"
+                EmptyTitle="Ask for a document"
+                EmptyBody="Send once for a draft, then again to see it revised into version two."
+                Suggestions="@(new[] { "Write me a README", "Tighten it and add an install step" })" />
+    </ChildContent>
+
+    <Aside>
+        <h3>Owned by the conversation</h3>
+        <p>
+            An artifact belongs to the conversation, not to a message. A revision three turns later
+            updates one object, so the UI keeps one panel with a version selector instead of
+            scattering near-identical code blocks through the transcript.
+        </p>
+        <p>
+            Copy and download work on the version being viewed. HTML artifacts render in a sandboxed
+            frame with same-origin access denied.
+        </p>
+    </Aside>
+</DemoPage>
+
+@code {
+    private readonly ChatSession _session = new(DemoContentTransports.Artifacts());
+}

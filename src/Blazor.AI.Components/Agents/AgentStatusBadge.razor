@@ -1,0 +1,42 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    A one-word summary of where a run stands, announced politely so a screen reader user hears the
+    transition without being interrupted.
+*@
+
+<span class="bai-chip" style="@Style" role="status" aria-live="polite">
+    @Label
+</span>
+
+@code {
+    /// <summary>The status to describe.</summary>
+    [Parameter, EditorRequired]
+    public AgentRunStatus Status { get; set; }
+
+    private string Label => Status switch
+    {
+        AgentRunStatus.Idle => "Idle",
+        AgentRunStatus.Planning => "Planning",
+        AgentRunStatus.Running => "Running",
+        AgentRunStatus.WaitingForInput => Strings.WaitingForYou,
+        AgentRunStatus.Completed => "Done",
+        AgentRunStatus.Failed => "Failed",
+        AgentRunStatus.Cancelled => "Stopped",
+        _ => Status.ToString(),
+    };
+
+    private string? Style => Status switch
+    {
+        AgentRunStatus.Running or AgentRunStatus.Planning =>
+            "background:var(--bai-color-accent-subtle);color:var(--bai-color-accent)",
+        AgentRunStatus.WaitingForInput =>
+            "background:var(--bai-color-warning-subtle);color:var(--bai-color-warning)",
+        AgentRunStatus.Completed =>
+            "background:var(--bai-color-success-subtle);color:var(--bai-color-success)",
+        AgentRunStatus.Failed =>
+            "background:var(--bai-color-danger-subtle);color:var(--bai-color-danger)",
+        _ => null,
+    };
+}

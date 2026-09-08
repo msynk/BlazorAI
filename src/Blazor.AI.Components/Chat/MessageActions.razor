@@ -1,0 +1,106 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    The row of actions under a finished assistant message: copy, regenerate, and feedback, plus
+    whatever metadata the host has chosen to show.
+
+    Hidden until the message is hovered or focused on pointer devices, and always visible on touch,
+    where there is no hover to reveal them with.
+*@
+
+<div class="bai-message__meta">
+    @if (Options.ShowMessageActions)
+    {
+        <div class="bai-message__actions @(Pinned ? "bai-message__actions--pinned" : null)">
+            <CopyButton Content="@Message.GetText()" />
+
+            @if (Session is not null && CanRegenerate)
+            {
+                <button type="button" class="bai-btn bai-btn--icon" title="@Strings.Regenerate" @onclick="RegenerateAsync">
+                    <AiIcon Name="refresh" />
+                </button>
+            }
+
+            @if (ShowFeedback)
+            {
+                <button type="button"
+                        class="bai-btn bai-btn--icon @(Message.Feedback is FeedbackKind.Positive ? "bai-btn--active" : null)"
+                        title="@Strings.GoodResponse"
+                        aria-pressed="@(Message.Feedback is FeedbackKind.Positive ? "true" : "false")"
+                        @onclick="() => SetFeedbackAsync(FeedbackKind.Positive)">
+                    <AiIcon Name="thumb-up" />
+                </button>
+                <button type="button"
+                        class="bai-btn bai-btn--icon @(Message.Feedback is FeedbackKind.Negative ? "bai-btn--active" : null)"
+                        title="@Strings.BadResponse"
+                        aria-pressed="@(Message.Feedback is FeedbackKind.Negative ? "true" : "false")"
+                        @onclick="() => SetFeedbackAsync(FeedbackKind.Negative)">
+                    <AiIcon Name="thumb-down" />
+                </button>
+            }
+
+            @if (ExtraActions is not null)
+            {
+                @ExtraActions
+            }
+        </div>
+    }
+
+    @if (Options.ShowModelName && Message.Metadata?.ModelId is { Length: > 0 } model)
+    {
+        <span>@model</span>
+    }
+
+    @if (Options.ShowUsage && Message.Metadata is { } metadata && !metadata.Usage.IsEmpty)
+    {
+        <TokenUsageView Usage="metadata.Usage" Metadata="metadata" />
+    }
+
+    @if (Options.ShowTimestamps)
+    {
+        <time datetime="@Message.CreatedAt.ToString("O")">@Message.CreatedAt.ToLocalTime().ToString("t")</time>
+    }
+</div>
+
+@code {
+    /// <summary>The message these actions belong to.</summary>
+    [Parameter, EditorRequired]
+    public AiMessage Message { get; set; } = default!;
+
+    /// <summary>The session, which enables regeneration.</summary>
+    [Parameter]
+    public ChatSession? Session { get; set; }
+
+    /// <summary>Keep the actions visible rather than revealing them on hover.</summary>
+    [Parameter]
+    public bool Pinned { get; set; }
+
+    /// <summary>Show the thumbs up and down buttons.</summary>
+    [Parameter]
+    public bool ShowFeedback { get; set; } = true;
+
+    /// <summary>Only offer regeneration for the newest assistant message.</summary>
+    [Parameter]
+    public bool CanRegenerate { get; set; } = true;
+
+    /// <summary>Extra buttons appended to the row.</summary>
+    [Parameter]
+    public RenderFragment? ExtraActions { get; set; }
+
+    /// <summary>Raised when the user records feedback, so a host can persist it.</summary>
+    [Parameter]
+    public EventCallback<FeedbackKind> OnFeedback { get; set; }
+
+    private async Task RegenerateAsync()
+    {
+        if (Session is not null) await Session.RegenerateAsync(Message.MessageId);
+    }
+
+    private async Task SetFeedbackAsync(FeedbackKind feedback)
+    {
+        var next = Message.Feedback == feedback ? FeedbackKind.None : feedback;
+        Message.SetFeedback(next);
+        await OnFeedback.InvokeAsync(next);
+    }
+}

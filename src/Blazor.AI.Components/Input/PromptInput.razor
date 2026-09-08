@@ -1,0 +1,467 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+@implements IDisposable
+@inject AiInterop Interop
+
+@*
+    The composer: text, attachments, slash commands, mentions, dictation, and the send or stop
+    button.
+
+    Enter sends and Shift+Enter inserts a newline, which is what people expect from a chat box and
+    the opposite of what a plain textarea does. The send button becomes a stop button while a turn
+    is in flight rather than sitting disabled beside one, because stopping is the action a user
+    actually wants at that moment.
+*@
+
+<div class="bai-composer" @ref="_root">
+    @if (_dragging)
+    {
+        <div class="bai-composer__drop">@Strings.DropFiles</div>
+    }
+
+    @if (_attachments.Count > 0)
+    {
+        <div class="bai-attachments">
+            @foreach (var attachment in _attachments)
+            {
+                <AttachmentChip Attachment="attachment" OnRemove="RemoveAttachment" @key="attachment.AttachmentId" />
+            }
+        </div>
+    }
+
+    @if (_menuItems.Count > 0)
+    {
+        <div class="bai-menu bai-menu--above" role="listbox">
+            @for (var i = 0; i < _menuItems.Count; i++)
+            {
+                var index = i;
+                var item = _menuItems[i];
+                <button type="button"
+                        role="option"
+                        aria-selected="@(index == _menuIndex ? "true" : "false")"
+                        class="bai-menu__item @(index == _menuIndex ? "bai-menu__item--active" : null)"
+                        @onclick="() => AcceptMenuItemAsync(index)">
+                    @if (item.Icon is { Length: > 0 } icon)
+                    {
+                        <AiIcon Name="@icon" />
+                    }
+                    <span class="bai-menu__label">@item.Label</span>
+                    @if (item.Description is { Length: > 0 } description)
+                    {
+                        <span class="bai-menu__hint">@description</span>
+                    }
+                </button>
+            }
+        </div>
+    }
+
+    <div class="bai-composer__row">
+        @if (Leading is not null)
+        {
+            <div class="bai-composer__tools">@Leading</div>
+        }
+
+        <textarea @ref="_textarea"
+                  class="bai-composer__textarea"
+                  rows="1"
+                  placeholder="@(Placeholder ?? Strings.PromptPlaceholder)"
+                  aria-label="@(Placeholder ?? Strings.PromptPlaceholder)"
+                  disabled="@Disabled"
+                  value="@Value"
+                  @oninput="OnInputAsync"
+                  @onkeydown="OnKeyDownAsync"></textarea>
+
+        <div class="bai-composer__tools">
+            @if (AllowAttachments)
+            {
+                <label class="bai-btn bai-btn--icon" title="@Strings.AttachFile">
+                    <AiIcon Name="paperclip" />
+                    <InputFile OnChange="OnFilesSelectedAsync" multiple accept="@Accept" style="display:none" />
+                    <span class="bai-sr-only">@Strings.AttachFile</span>
+                </label>
+            }
+
+            @if (AllowDictation)
+            {
+                <VoiceInput OnTranscript="OnTranscriptAsync" />
+            }
+
+            @if (Trailing is not null)
+            {
+                @Trailing
+            }
+
+            @if (IsGenerating)
+            {
+                <button type="button"
+                        class="bai-btn bai-btn--icon bai-composer__send bai-btn--outline"
+                        title="@Strings.Stop"
+                        aria-label="@Strings.Stop"
+                        @onclick="StopAsync">
+                    <AiIcon Name="stop" />
+                </button>
+            }
+            else
+            {
+                <button type="button"
+                        class="bai-btn bai-btn--primary bai-composer__send"
+                        title="@Strings.Send"
+                        aria-label="@Strings.Send"
+                        disabled="@(!CanSubmit)"
+                        @onclick="SubmitAsync">
+                    <AiIcon Name="send" />
+                </button>
+            }
+        </div>
+    </div>
+
+    @if (Hint is not null)
+    {
+        <div class="bai-composer__hint">@Hint</div>
+    }
+</div>
+
+@code {
+    private readonly List<Attachment> _attachments = [];
+    private readonly List<MenuEntry> _menuItems = [];
+    private ElementReference _root;
+    private ElementReference _textarea;
+    private DotNetObjectReference<PromptInput>? _self;
+    private bool _dragging;
+    private int _menuIndex;
+    private char _menuTrigger;
+    private int _menuStart = -1;
+
+    /// <summary>The composer text.</summary>
+    [Parameter]
+    public string Value { get; set; } = string.Empty;
+
+    /// <summary>Raised whenever the text changes, so the value can be bound.</summary>
+    [Parameter]
+    public EventCallback<string> ValueChanged { get; set; }
+
+    /// <summary>
+    /// Raised when the user submits. Receives the text and any attachments staged in the composer.
+    /// </summary>
+    [Parameter]
+    public EventCallback<PromptSubmission> OnSubmit { get; set; }
+
+    /// <summary>Raised when the user asks to stop the current turn.</summary>
+    [Parameter]
+    public EventCallback OnStop { get; set; }
+
+    /// <summary>The session, which supplies generation state and receives submissions.</summary>
+    [Parameter]
+    public ChatSession? Session { get; set; }
+
+    /// <summary>Whether a turn is in flight. Falls back to the session when unset.</summary>
+    [Parameter]
+    public bool? Generating { get; set; }
+
+    /// <summary>Placeholder text.</summary>
+    [Parameter]
+    public string? Placeholder { get; set; }
+
+    /// <summary>Disables the whole composer.</summary>
+    [Parameter]
+    public bool Disabled { get; set; }
+
+    /// <summary>Offer the attachment button and accept dropped or pasted files.</summary>
+    [Parameter]
+    public bool AllowAttachments { get; set; } = true;
+
+    /// <summary>Offer the dictation button, when the browser supports it.</summary>
+    [Parameter]
+    public bool AllowDictation { get; set; }
+
+    /// <summary>The accept attribute for the file picker.</summary>
+    [Parameter]
+    public string? Accept { get; set; }
+
+    /// <summary>The largest file the composer will stage, in bytes.</summary>
+    [Parameter]
+    public long MaxAttachmentSize { get; set; } = 10 * 1024 * 1024;
+
+    /// <summary>Commands offered when the user types a forward slash.</summary>
+    [Parameter]
+    public IReadOnlyList<SlashCommand>? Commands { get; set; }
+
+    /// <summary>Items offered when the user types an at sign.</summary>
+    [Parameter]
+    public IReadOnlyList<MentionItem>? Mentions { get; set; }
+
+    /// <summary>Content placed before the textarea, such as a model picker.</summary>
+    [Parameter]
+    public RenderFragment? Leading { get; set; }
+
+    /// <summary>Content placed between the tools and the send button.</summary>
+    [Parameter]
+    public RenderFragment? Trailing { get; set; }
+
+    /// <summary>A hint rendered under the composer.</summary>
+    [Parameter]
+    public RenderFragment? Hint { get; set; }
+
+    /// <summary>Raised when a file is rejected for being too large.</summary>
+    [Parameter]
+    public EventCallback<string> OnAttachmentRejected { get; set; }
+
+    /// <summary>The attachments currently staged.</summary>
+    public IReadOnlyList<Attachment> Attachments => _attachments;
+
+    private bool IsGenerating => Generating ?? Session?.IsGenerating ?? false;
+
+    private bool CanSubmit => !Disabled && !IsGenerating
+        && (!string.IsNullOrWhiteSpace(Value) || _attachments.Count > 0);
+
+    /// <summary>Puts the caret in the composer.</summary>
+    /// <returns>A task that completes once focus has been requested.</returns>
+    public ValueTask FocusAsync() => Interop.InvokeVoidAsync("focusElement", _textarea, false);
+
+    /// <inheritdoc />
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && AllowAttachments)
+        {
+            _self = DotNetObjectReference.Create(this);
+            await Interop.InvokeVoidAsync("registerPaste", _textarea, _self);
+            await Interop.InvokeVoidAsync("registerDrop", _root, _self);
+        }
+
+        if (firstRender)
+        {
+            await Interop.InvokeVoidAsync("registerSubmitKey", _textarea, Options.SubmitOnEnter);
+        }
+
+        await Interop.InvokeVoidAsync("autoResize", _textarea, Options.MaxComposerRows);
+    }
+
+    private async Task OnInputAsync(ChangeEventArgs args)
+    {
+        Value = args.Value?.ToString() ?? string.Empty;
+        await ValueChanged.InvokeAsync(Value);
+        UpdateMenu();
+    }
+
+    private async Task OnKeyDownAsync(KeyboardEventArgs args)
+    {
+        if (_menuItems.Count > 0)
+        {
+            switch (args.Key)
+            {
+                case "ArrowDown":
+                    _menuIndex = (_menuIndex + 1) % _menuItems.Count;
+                    return;
+                case "ArrowUp":
+                    _menuIndex = (_menuIndex - 1 + _menuItems.Count) % _menuItems.Count;
+                    return;
+                case "Enter" or "Tab":
+                    await AcceptMenuItemAsync(_menuIndex);
+                    return;
+                case "Escape":
+                    CloseMenu();
+                    return;
+            }
+        }
+
+        var submits = Options.SubmitOnEnter
+            ? args.Key is "Enter" && !args.ShiftKey && !args.AltKey && !args.CtrlKey && !args.MetaKey
+            : args.Key is "Enter" && (args.CtrlKey || args.MetaKey);
+
+        if (!submits) return;
+
+        // The newline was already suppressed in the browser by the registered submit-key guard.
+        await SubmitAsync();
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (!CanSubmit) return;
+
+        var submission = new PromptSubmission(Value.Trim(), _attachments.ToArray());
+
+        Value = string.Empty;
+        _attachments.Clear();
+        CloseMenu();
+
+        await ValueChanged.InvokeAsync(Value);
+        await OnSubmit.InvokeAsync(submission);
+        await Interop.InvokeVoidAsync("autoResize", _textarea, Options.MaxComposerRows);
+
+        if (Session is not null && !OnSubmit.HasDelegate)
+        {
+            await Session.SubmitAsync(submission.Text, submission.Attachments);
+        }
+    }
+
+    private async Task StopAsync()
+    {
+        Session?.Stop();
+        await OnStop.InvokeAsync();
+    }
+
+    private async Task OnTranscriptAsync(string transcript)
+    {
+        Value = string.IsNullOrEmpty(Value) ? transcript : $"{Value} {transcript}";
+        await ValueChanged.InvokeAsync(Value);
+    }
+
+    private async Task OnFilesSelectedAsync(InputFileChangeEventArgs args)
+    {
+        foreach (var file in args.GetMultipleFiles(20))
+        {
+            if (file.Size > MaxAttachmentSize)
+            {
+                await OnAttachmentRejected.InvokeAsync(file.Name);
+                continue;
+            }
+
+            await using var stream = file.OpenReadStream(MaxAttachmentSize);
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer);
+            var bytes = buffer.ToArray();
+
+            _attachments.Add(new Attachment(AiId.New("att"), file.Name)
+            {
+                ContentType = file.ContentType,
+                Size = file.Size,
+                Kind = Attachment.InferKind(file.ContentType, file.Name),
+                Data = bytes,
+                Url = $"data:{file.ContentType};base64,{Convert.ToBase64String(bytes)}",
+            });
+        }
+    }
+
+    private void RemoveAttachment(Attachment attachment) => _attachments.Remove(attachment);
+
+    /// <summary>Called from the browser when the user pastes a file into the composer.</summary>
+    /// <param name="file">The pasted file.</param>
+    /// <returns>A task that completes when the attachment has been staged.</returns>
+    [JSInvokable]
+    public async Task OnPastedFile(ComposerFile file)
+    {
+        if (file.Size <= MaxAttachmentSize) _attachments.Add(file.ToAttachment());
+        else await OnAttachmentRejected.InvokeAsync(file.Name);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>Called from the browser when the user drops a file onto the composer.</summary>
+    /// <param name="file">The dropped file.</param>
+    /// <returns>A task that completes when the attachment has been staged.</returns>
+    [JSInvokable]
+    public Task OnDroppedFile(ComposerFile file) => OnPastedFile(file);
+
+    /// <summary>Called from the browser as a drag enters or leaves the composer.</summary>
+    /// <param name="dragging">Whether a drag is currently over the composer.</param>
+    /// <returns>A task that completes when the state has been applied.</returns>
+    [JSInvokable]
+    public Task OnDragStateChanged(bool dragging)
+    {
+        _dragging = dragging;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private void UpdateMenu()
+    {
+        CloseMenu();
+        if (Value.Length == 0) return;
+
+        var caret = Value.Length;
+        var start = caret - 1;
+        while (start >= 0 && !char.IsWhiteSpace(Value[start]) && Value[start] is not ('/' or '@')) start--;
+        if (start < 0) return;
+
+        var trigger = Value[start];
+        if (trigger is not ('/' or '@')) return;
+        if (start > 0 && !char.IsWhiteSpace(Value[start - 1])) return;
+        if (trigger == '/' && start != 0) return;
+
+        var query = Value[(start + 1)..caret];
+        if (query.Contains(' ')) return;
+
+        if (trigger == '/' && Commands is { Count: > 0 } commands)
+        {
+            foreach (var command in commands)
+            {
+                if (!command.Name.Contains(query, StringComparison.OrdinalIgnoreCase)) continue;
+                _menuItems.Add(new MenuEntry($"/{command.Name}", command.Description, command.Icon, command, null));
+            }
+        }
+        else if (trigger == '@' && Mentions is { Count: > 0 } mentions)
+        {
+            foreach (var mention in mentions)
+            {
+                if (!mention.Label.Contains(query, StringComparison.OrdinalIgnoreCase)) continue;
+                _menuItems.Add(new MenuEntry(mention.Label, mention.Description, mention.Icon, null, mention));
+            }
+        }
+
+        if (_menuItems.Count == 0) return;
+
+        _menuTrigger = trigger;
+        _menuStart = start;
+        _menuIndex = 0;
+    }
+
+    private async Task AcceptMenuItemAsync(int index)
+    {
+        if (index < 0 || index >= _menuItems.Count) return;
+
+        var entry = _menuItems[index];
+        var prefix = _menuStart >= 0 ? Value[.._menuStart] : Value;
+
+        if (entry.Command is { } command)
+        {
+            CloseMenu();
+
+            if (command.Handler is not null)
+            {
+                Value = prefix;
+                await ValueChanged.InvokeAsync(Value);
+                await command.Handler();
+                return;
+            }
+
+            Value = prefix + (command.Template ?? $"/{command.Name} ");
+        }
+        else if (entry.Mention is { } mention)
+        {
+            CloseMenu();
+            Value = $"{prefix}@{mention.Label} ";
+        }
+
+        await ValueChanged.InvokeAsync(Value);
+        await FocusAsync();
+    }
+
+    private void CloseMenu()
+    {
+        _menuItems.Clear();
+        _menuIndex = 0;
+        _menuStart = -1;
+        _menuTrigger = '\0';
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        _self?.Dispose();
+        _self = null;
+    }
+
+    private sealed record MenuEntry(
+        string Label,
+        string? Description,
+        string? Icon,
+        SlashCommand? Command,
+        MentionItem? Mention);
+}
+
+@code {
+    /// <summary>
+    /// What the composer hands over when the user submits.
+    /// </summary>
+    /// <param name="Text">The trimmed text.</param>
+    /// <param name="Attachments">The files staged alongside it.</param>
+    public sealed record PromptSubmission(string Text, IReadOnlyList<Attachment> Attachments);
+}

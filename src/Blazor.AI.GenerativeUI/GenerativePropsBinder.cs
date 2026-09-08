@@ -1,0 +1,102 @@
+using System.Text.Json;
+
+namespace Blazor.AI.GenerativeUI;
+
+/// <summary>
+/// The outcome of binding model-produced JSON onto a registered component.
+/// </summary>
+/// <param name="Parameters">The parameters to pass to the component.</param>
+/// <param name="Errors">
+/// Properties that could not be bound, with the reason. Non-fatal: the component still renders with
+/// whatever did bind, because a partially usable card beats an error message.
+/// </param>
+public sealed record GenerativeBindResult(
+    IReadOnlyDictionary<string, object?> Parameters,
+    IReadOnlyList<string> Errors)
+{
+    /// <summary><see langword="true"/> when every supplied property bound cleanly.</summary>
+    public bool IsComplete => Errors.Count == 0;
+}
+
+/// <summary>
+/// Converts model-produced JSON into Blazor component parameters.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The binder is intentionally strict about what it accepts and forgiving about what it does with
+/// the rest. Unknown property names are ignored rather than passed through, so a hallucinated
+/// property cannot reach the component; a value of the wrong shape is reported and skipped rather
+/// than thrown, so one bad field does not lose the whole card.
+/// </para>
+/// <para>
+/// It tolerates partial input by design, since props stream in and a component is rendered several
+/// times before the payload is finished.
+/// </para>
+/// </remarks>
+public static class GenerativePropsBinder
+{
+    private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
+    {
+        PropertyNameCaseInsensitive = true,
+    };
+
+    /// <summary>
+    /// Binds a JSON object onto the parameters of a registered component.
+    /// </summary>
+    /// <param name="component">The registration, which defines what may be set.</param>
+    /// <param name="props">The model-produced properties. Anything but an object binds nothing.</param>
+    /// <returns>The parameters to render with, and any problems found.</returns>
+    public static GenerativeBindResult Bind(GenerativeComponent component, JsonElement? props)
+    {
+        ArgumentNullException.ThrowIfNull(component);
+
+        var parameters = new Dictionary<string, object?>(StringComparer.Ordinal);
+        var errors = new List<string>();
+
+        if (props is not { ValueKind: JsonValueKind.Object } payload)
+        {
+            return new GenerativeBindResult(parameters, errors);
+        }
+
+        foreach (var property in payload.EnumerateObject())
+        {
+            var declared = component.FindProperty(property.Name);
+            if (declared is null)
+            {
+                errors.Add($"'{property.Name}' is not a property of '{component.Name}'.");
+                continue;
+            }
+
+            if (property.Value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            {
+                if (IsNullable(declared.Type)) parameters[declared.Name] = null;
+                continue;
+            }
+
+            try
+            {
+                parameters[declared.Name] = property.Value.Deserialize(declared.Type, Options);
+            }
+            catch (JsonException exception)
+            {
+                errors.Add($"'{property.Name}' could not be read as {declared.Type.Name}: {exception.Message}");
+            }
+            catch (NotSupportedException exception)
+            {
+                errors.Add($"'{property.Name}' could not be read as {declared.Type.Name}: {exception.Message}");
+            }
+        }
+
+        foreach (var required in component.Properties)
+        {
+            if (required.IsRequired && !parameters.ContainsKey(required.Name))
+            {
+                errors.Add($"'{required.Name}' is required by '{component.Name}'.");
+            }
+        }
+
+        return new GenerativeBindResult(parameters, errors);
+    }
+
+    private static bool IsNullable(Type type) => !type.IsValueType || Nullable.GetUnderlyingType(type) is not null;
+}

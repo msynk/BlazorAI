@@ -1,0 +1,57 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+@implements IDisposable
+
+@*
+    Renders Markdown that is still being written.
+
+    Holds one incremental parser for the lifetime of the component, so text already seen is parsed
+    once no matter how many deltas arrive. That is the difference between a long streamed answer
+    costing linear work and quadratic work.
+*@
+
+<MarkdownView Document="_document"
+              Citations="Citations"
+              OnCitationClick="OnCitationClick"
+              ShowCaret="@IsStreaming"
+              Class="@Class" />
+
+@code {
+    private readonly IncrementalMarkdownParser _parser = new();
+    private MarkdownDocument? _document;
+    private string? _lastText;
+    private bool _lastStreaming = true;
+
+    /// <summary>The Markdown received so far.</summary>
+    [Parameter]
+    public string? Text { get; set; }
+
+    /// <summary>Whether more text is expected.</summary>
+    [Parameter]
+    public bool IsStreaming { get; set; }
+
+    /// <summary>Citations that inline markers resolve against.</summary>
+    [Parameter]
+    public IReadOnlyList<Citation>? Citations { get; set; }
+
+    /// <summary>Raised when the user activates a citation marker.</summary>
+    [Parameter]
+    public EventCallback<Citation> OnCitationClick { get; set; }
+
+    /// <summary>Extra CSS classes.</summary>
+    [Parameter]
+    public string? Class { get; set; }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        if (_lastText == Text && _lastStreaming == IsStreaming) return;
+
+        _lastText = Text;
+        _lastStreaming = IsStreaming;
+        _document = _parser.Parse(Text, !IsStreaming);
+    }
+
+    /// <inheritdoc />
+    public void Dispose() => _parser.Reset();
+}

@@ -1,0 +1,261 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    A form the model proposed, for the user to check and submit.
+
+    Validation happens here rather than in the model, because a model asked to validate its own
+    output will sometimes say yes when the answer is no. Fields appear as they stream in, so a form
+    generated field by field fills in rather than blinking into existence.
+*@
+
+<div class="bai-form @Class">
+    @if (Definition.Title is { Length: > 0 } title)
+    {
+        <div class="bai-empty__title" style="font-size:1rem">@title</div>
+    }
+
+    @if (Definition.Description is { Length: > 0 } description)
+    {
+        <div class="bai-field__hint">@description</div>
+    }
+
+    @foreach (var field in Definition.Fields)
+    {
+        var error = _errors.GetValueOrDefault(field.Name);
+        <div class="bai-field @(error is not null ? "bai-field--invalid" : null)" @key="field.Name">
+            <label class="bai-field__label" for="@FieldId(field)">
+                @field.DisplayLabel
+                @if (field.Required)
+                {
+                    <span aria-hidden="true" style="color:var(--bai-color-danger)"> *</span>
+                }
+            </label>
+
+            @RenderControl(field, error)
+
+            @if (field.Description is { Length: > 0 } hint)
+            {
+                <span class="bai-field__hint">@hint</span>
+            }
+
+            @if (error is not null)
+            {
+                <span class="bai-field__error" role="alert">@error</span>
+            }
+        </div>
+    }
+
+    @if (!Submitted)
+    {
+        <div class="bai-form__actions">
+            @if (Definition.CancelLabel is { Length: > 0 } cancel)
+            {
+                <button type="button" class="bai-btn bai-btn--outline" disabled="@Busy" @onclick="CancelAsync">
+                    @cancel
+                </button>
+            }
+            <button type="button" class="bai-btn bai-btn--primary" disabled="@Busy" @onclick="SubmitAsync">
+                @Definition.SubmitLabel
+            </button>
+        </div>
+    }
+    else
+    {
+        <div class="bai-chip" style="align-self:flex-end">
+            <AiIcon Name="check" />
+            <span>Submitted</span>
+        </div>
+    }
+</div>
+
+@code {
+    private readonly Dictionary<string, string?> _values = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _errors = new(StringComparer.Ordinal);
+    private readonly string _id = $"bai-form-{Guid.NewGuid():N}";
+    private int _seededFieldCount;
+
+    /// <summary>The form to render.</summary>
+    [Parameter, EditorRequired]
+    public AiFormDefinition Definition { get; set; } = default!;
+
+    /// <summary>Raised with the collected values when the user submits a valid form.</summary>
+    [Parameter]
+    public EventCallback<IReadOnlyDictionary<string, string?>> OnSubmit { get; set; }
+
+    /// <summary>Raised when the user cancels.</summary>
+    [Parameter]
+    public EventCallback OnCancel { get; set; }
+
+    /// <summary>Whether the form has already been submitted, which locks the actions.</summary>
+    [Parameter]
+    public bool Submitted { get; set; }
+
+    /// <summary>Disables the actions while something else is in flight.</summary>
+    [Parameter]
+    public bool Busy { get; set; }
+
+    /// <summary>Extra CSS classes.</summary>
+    [Parameter]
+    public string? Class { get; set; }
+
+    /// <summary>The values as they currently stand.</summary>
+    public IReadOnlyDictionary<string, string?> Values => _values;
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        // Seed only fields that have appeared since the last pass, so a field streaming in later
+        // never overwrites something the user has already typed.
+        if (Definition.Fields.Count == _seededFieldCount) return;
+
+        foreach (var field in Definition.Fields)
+        {
+            if (!_values.ContainsKey(field.Name)) _values[field.Name] = field.Value;
+        }
+
+        _seededFieldCount = Definition.Fields.Count;
+    }
+
+    private string FieldId(AiFormField field) => $"{_id}-{field.Name}";
+
+    private RenderFragment RenderControl(AiFormField field, string? error) => __builder =>
+    {
+        var id = FieldId(field);
+        var value = _values.GetValueOrDefault(field.Name);
+
+        switch (field.Type)
+        {
+            case AiFieldType.Boolean:
+                <input id="@id" type="checkbox" class="bai-task-list__box"
+                       checked="@IsTrue(value)"
+                       @onchange="e => Set(field.Name, ToBoolText(e.Value))" />
+                break;
+
+            case AiFieldType.Select:
+                <select id="@id" class="bai-select" value="@value"
+                        @onchange="e => Set(field.Name, e.Value?.ToString())">
+                    <option value=""></option>
+                    @foreach (var option in field.Options ?? [])
+                    {
+                        <option value="@option">@option</option>
+                    }
+                </select>
+                break;
+
+            case AiFieldType.MultilineText:
+                <textarea id="@id" class="bai-textarea" rows="4" placeholder="@field.Placeholder"
+                          @oninput="e => Set(field.Name, e.Value?.ToString())">@value</textarea>
+                break;
+
+            default:
+                <input id="@id" class="bai-input" type="@InputType(field.Type)" value="@value"
+                       placeholder="@field.Placeholder"
+                       required="@field.Required"
+                       @oninput="e => Set(field.Name, e.Value?.ToString())" />
+                break;
+        }
+    };
+
+    private static bool IsTrue(string? value) => string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+
+    private static string ToBoolText(object? value) => value is true ? "true" : "false";
+
+    private static string InputType(AiFieldType type) => type switch
+    {
+        AiFieldType.Number => "number",
+        AiFieldType.Date => "date",
+        AiFieldType.DateTime => "datetime-local",
+        AiFieldType.Email => "email",
+        AiFieldType.Url => "url",
+        AiFieldType.Password => "password",
+        _ => "text",
+    };
+
+    private void Set(string name, string? value)
+    {
+        _values[name] = value;
+        _errors.Remove(name);
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (!Validate()) return;
+        await OnSubmit.InvokeAsync(new Dictionary<string, string?>(_values, StringComparer.Ordinal));
+    }
+
+    private Task CancelAsync() => OnCancel.InvokeAsync();
+
+    private bool Validate()
+    {
+        _errors.Clear();
+
+        foreach (var field in Definition.Fields)
+        {
+            var value = _values.GetValueOrDefault(field.Name);
+
+            if (field.Required && string.IsNullOrWhiteSpace(value) && field.Type is not AiFieldType.Boolean)
+            {
+                _errors[field.Name] = $"{field.DisplayLabel} is required.";
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(value)) continue;
+
+            if (field.Type is AiFieldType.Number)
+            {
+                if (!double.TryParse(value, out var number))
+                {
+                    _errors[field.Name] = $"{field.DisplayLabel} must be a number.";
+                    continue;
+                }
+
+                if (field.Minimum is { } min && number < min)
+                {
+                    _errors[field.Name] = $"{field.DisplayLabel} must be at least {min}.";
+                    continue;
+                }
+
+                if (field.Maximum is { } max && number > max)
+                {
+                    _errors[field.Name] = $"{field.DisplayLabel} must be at most {max}.";
+                    continue;
+                }
+            }
+
+            if (field.Type is AiFieldType.Email && !value.Contains('@'))
+            {
+                _errors[field.Name] = $"{field.DisplayLabel} must be an email address.";
+                continue;
+            }
+
+            if (field.Pattern is { Length: > 0 } pattern && !IsMatch(value, pattern))
+            {
+                _errors[field.Name] = $"{field.DisplayLabel} is not in the expected format.";
+            }
+        }
+
+        return _errors.Count == 0;
+    }
+
+    /// <remarks>
+    /// A model can produce a pattern that backtracks catastrophically, so matching runs under a
+    /// timeout and a failure to match is treated as a validation failure rather than an exception.
+    /// </remarks>
+    private static bool IsMatch(string value, string pattern)
+    {
+        try
+        {
+            return System.Text.RegularExpressions.Regex.IsMatch(
+                value, pattern, System.Text.RegularExpressions.RegexOptions.None, TimeSpan.FromMilliseconds(200));
+        }
+        catch (ArgumentException)
+        {
+            return true;
+        }
+        catch (System.Text.RegularExpressions.RegexMatchTimeoutException)
+        {
+            return false;
+        }
+    }
+}

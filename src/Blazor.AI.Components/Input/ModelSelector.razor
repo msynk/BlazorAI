@@ -1,0 +1,103 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    A grouped model picker driven by the registered catalogue.
+
+    A native select rather than a custom popover: it is keyboard accessible, screen-reader correct,
+    and renders as the platform picker on mobile, none of which a hand-rolled listbox gets for free.
+*@
+
+@if (_models.Count > 0)
+{
+    <select class="bai-select"
+            style="width:auto"
+            aria-label="@Strings.Model"
+            title="@_selected?.Description"
+            disabled="@Disabled"
+            value="@ModelId"
+            @onchange="OnChangedAsync">
+        @foreach (var group in _groups)
+        {
+            @if (group.Key is { Length: > 0 } label)
+            {
+                <optgroup label="@label">
+                    @foreach (var model in group)
+                    {
+                        <option value="@model.ModelId">@model.Name</option>
+                    }
+                </optgroup>
+            }
+            else
+            {
+                @foreach (var model in group)
+                {
+                    <option value="@model.ModelId">@model.Name</option>
+                }
+            }
+        }
+    </select>
+}
+
+@code {
+    private List<AiModel> _models = [];
+    private List<IGrouping<string?, AiModel>> _groups = [];
+    private AiModel? _selected;
+
+    /// <summary>The catalogue to offer. Falls back to the registered one.</summary>
+    [Parameter]
+    public IModelCatalog? Catalog { get; set; }
+
+    /// <summary>Restricts the list, for hosts that filter by entitlement.</summary>
+    [Parameter]
+    public IReadOnlyList<AiModel>? Models { get; set; }
+
+    /// <summary>The selected model.</summary>
+    [Parameter]
+    public string? ModelId { get; set; }
+
+    /// <summary>Raised when the selection changes, so the value can be bound.</summary>
+    [Parameter]
+    public EventCallback<string> ModelIdChanged { get; set; }
+
+    /// <summary>Raised with the full model record when the selection changes.</summary>
+    [Parameter]
+    public EventCallback<AiModel> OnModelSelected { get; set; }
+
+    /// <summary>Disables the picker, for example while a turn is in flight.</summary>
+    [Parameter]
+    public bool Disabled { get; set; }
+
+    /// <summary>Include models marked deprecated.</summary>
+    [Parameter]
+    public bool IncludeDeprecated { get; set; }
+
+    [Inject]
+    private IServiceProvider Services { get; set; } = default!;
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        var catalog = Catalog ?? Services.GetService(typeof(IModelCatalog)) as IModelCatalog;
+        var source = Models ?? catalog?.Models ?? [];
+
+        _models = source.Where(m => IncludeDeprecated || !m.IsDeprecated).ToList();
+        _groups = _models
+            .GroupBy(m => m.Family ?? (m.ProviderId is { } id ? catalog?.FindProvider(id)?.Name : null))
+            .ToList();
+
+        _selected = _models.FirstOrDefault(m => m.ModelId == ModelId) ?? _models.FirstOrDefault();
+    }
+
+    private async Task OnChangedAsync(ChangeEventArgs args)
+    {
+        var id = args.Value?.ToString();
+        if (id is null) return;
+
+        ModelId = id;
+        _selected = _models.FirstOrDefault(m => m.ModelId == id);
+
+        await ModelIdChanged.InvokeAsync(id);
+        if (_selected is not null) await OnModelSelected.InvokeAsync(_selected);
+    }
+}

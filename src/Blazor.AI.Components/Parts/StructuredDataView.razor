@@ -1,0 +1,122 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+@inject AiRendererRegistry Renderers
+
+@*
+    Structured model output, rendered by whatever the host registered for its schema and otherwise
+    by a default that reads the shape: arrays of objects become tables, objects become key and value
+    lists, everything else becomes a JSON tree.
+
+    All three cope with a partial payload, because the value is re-parsed leniently on every delta
+    and fields fill in as they arrive.
+*@
+
+@if (_custom is not null)
+{
+    <RendererBoundary Label="@($"The renderer for '{Part.SchemaName}' failed")">
+        @_custom
+    </RendererBoundary>
+}
+else if (Part.Value is { } value)
+{
+    @switch (value.ValueKind)
+    {
+        case JsonValueKind.Array when IsTabular(value):
+            <DataTable Rows="value" />
+            break;
+
+        case JsonValueKind.Object:
+            <dl class="bai-form" style="gap:var(--bai-space-2)">
+                @foreach (var property in value.EnumerateObject())
+                {
+                    <div class="bai-field" style="gap:0">
+                        <dt class="bai-field__label">@Humanize(property.Name)</dt>
+                        <dd style="margin:0">@RenderScalar(property.Value)</dd>
+                    </div>
+                }
+            </dl>
+            break;
+
+        default:
+            <JsonView Value="value" />
+            break;
+    }
+}
+else if (Part.IsStreaming)
+{
+    <ThinkingIndicator />
+}
+
+@code {
+    private RenderFragment? _custom;
+
+    /// <summary>The structured part to render.</summary>
+    [Parameter, EditorRequired]
+    public StructuredDataPart Part { get; set; } = default!;
+
+    /// <summary>The message the part belongs to.</summary>
+    [Parameter]
+    public AiMessage? Message { get; set; }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet() =>
+        _custom = Renderers.FindStructured(Part.SchemaName)
+            ?.Invoke(new StructuredDataContext(Part, Message ?? new AiMessage(AiRole.Assistant)));
+
+    private static bool IsTabular(JsonElement value)
+    {
+        if (value.GetArrayLength() == 0) return false;
+        foreach (var item in value.EnumerateArray())
+        {
+            if (item.ValueKind is not JsonValueKind.Object) return false;
+        }
+
+        return true;
+    }
+
+    private RenderFragment RenderScalar(JsonElement value) => __builder =>
+    {
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.Object:
+            case JsonValueKind.Array:
+                <JsonView Value="value" DefaultExpandDepth="1" />
+                break;
+
+            case JsonValueKind.String:
+                @value.GetString()
+                break;
+
+            case JsonValueKind.Null:
+            case JsonValueKind.Undefined:
+                <span class="bai-json__null">-</span>
+                break;
+
+            default:
+                @value.ToString()
+                break;
+        }
+    };
+
+    /// <summary>Turns a JSON property name into something a person would write on a label.</summary>
+    internal static string Humanize(string name)
+    {
+        if (name.Length == 0) return name;
+
+        var builder = new System.Text.StringBuilder(name.Length + 4);
+        for (var i = 0; i < name.Length; i++)
+        {
+            var c = name[i];
+            if (c is '_' or '-')
+            {
+                builder.Append(' ');
+                continue;
+            }
+
+            if (i > 0 && char.IsUpper(c) && !char.IsUpper(name[i - 1])) builder.Append(' ');
+            builder.Append(i == 0 ? char.ToUpperInvariant(c) : c);
+        }
+
+        return builder.ToString();
+    }
+}

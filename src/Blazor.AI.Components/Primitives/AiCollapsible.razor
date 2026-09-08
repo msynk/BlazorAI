@@ -1,0 +1,74 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    A disclosure panel with a real button header, so it is keyboard reachable and announced
+    correctly. Used by reasoning panels, tool cards, and error details.
+*@
+
+<div class="bai-panel @(Open ? "bai-panel--open" : null) @Class">
+    <button type="button"
+            class="bai-panel__header"
+            aria-expanded="@(Open ? "true" : "false")"
+            aria-controls="@_bodyId"
+            @onclick="ToggleAsync">
+        <AiIcon Name="chevron-right" Class="bai-panel__chevron" />
+        @if (Header is not null)
+        {
+            @Header
+        }
+        else
+        {
+            <span class="bai-panel__title">@Title</span>
+        }
+        @if (Trailing is not null)
+        {
+            @Trailing
+        }
+    </button>
+
+    @if (Open)
+    {
+        <div class="bai-panel__body" id="@_bodyId">
+            @ChildContent
+        </div>
+    }
+</div>
+
+@code {
+    private readonly string _bodyId = $"bai-panel-{Guid.NewGuid():N}";
+
+    /// <summary>Whether the panel is open.</summary>
+    [Parameter]
+    public bool Open { get; set; }
+
+    /// <summary>Raised when the user toggles the panel.</summary>
+    [Parameter]
+    public EventCallback<bool> OpenChanged { get; set; }
+
+    /// <summary>The header text, used when no header template is supplied.</summary>
+    [Parameter]
+    public string? Title { get; set; }
+
+    /// <summary>Custom header content.</summary>
+    [Parameter]
+    public RenderFragment? Header { get; set; }
+
+    /// <summary>Content pinned to the right of the header, such as a status chip.</summary>
+    [Parameter]
+    public RenderFragment? Trailing { get; set; }
+
+    /// <summary>The panel body, rendered only while open.</summary>
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>Extra CSS classes.</summary>
+    [Parameter]
+    public string? Class { get; set; }
+
+    private async Task ToggleAsync()
+    {
+        Open = !Open;
+        await OpenChanged.InvokeAsync(Open);
+    }
+}

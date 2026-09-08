@@ -1,0 +1,30 @@
+<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <WarningsAsErrors>nullable</WarningsAsErrors>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <IsPackable>false</IsPackable>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Package metadata">
+    <Version>1.0.0-preview.1</Version>
+    <Authors>Saleh Yusefnejad</Authors>
+    <Company>Blazor.AI</Company>
+    <Product>Blazor.AI</Product>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/msynk/BlazorAI</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/msynk/BlazorAI</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>blazor;ai;chat;llm;agents;streaming;ui;components</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <Copyright>Copyright (c) 2026 Saleh Yusefnejad</Copyright>
+  </PropertyGroup>
+
+</Project>

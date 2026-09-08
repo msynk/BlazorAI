@@ -1,0 +1,48 @@
+@page "/"
+@page "/basic"
+
+<DemoPage Title="Basic chat"
+          Summary="A working chat in three lines of markup. The session comes from the registered transport, and everything else is default behaviour.">
+    <ChildContent>
+        <AiChat Session="_session"
+                EmptyTitle="Ask me anything"
+                EmptyBody="This demo echoes what you send, one character at a time."
+                Suggestions="_suggestions" />
+    </ChildContent>
+
+    <Aside>
+        <h3>What is happening</h3>
+        <p>
+            <code>AiChat</code> creates a <code>ChatSession</code> from the registered
+            <code>IAiTransport</code>, binds a <code>Conversation</code> to it, and renders the
+            transcript and composer. The transport here is twenty lines of scripted C#.
+        </p>
+        <CodeBlockView Language="razor" Code="@Snippet" />
+        <p class="demo__note">
+            Press Enter to send, Shift and Enter for a newline. The composer grows as you type and
+            stops at twelve rows.
+        </p>
+    </Aside>
+</DemoPage>
+
+@code {
+    private ChatSession? _session;
+
+    private readonly string[] _suggestions =
+    [
+        "What can this framework do?",
+        "Show me streaming",
+        "Explain render modes",
+    ];
+
+    [Inject] private ChatSessionFactory Sessions { get; set; } = default!;
+
+    protected override void OnInitialized() => _session = Sessions.Create();
+
+    private const string Snippet = """
+        <ChildContent>
+        <AiChat Session="_session"
+                EmptyTitle="Ask me anything"
+                Suggestions="_suggestions" />
+        """;
+}

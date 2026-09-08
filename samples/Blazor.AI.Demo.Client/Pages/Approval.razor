@@ -1,0 +1,48 @@
+@page "/approval"
+
+<DemoPage Title="Tool approval"
+          Summary="A destructive tool stops and waits for a human. Allow once, allow always, or decline.">
+    <ChildContent>
+        <AiChat Session="_session"
+                EmptyTitle="Ask for something destructive"
+                EmptyBody="delete_records is declared destructive, so the framework will not run it unattended."
+                Suggestions="@(new[] { "Delete the archived records" })" />
+    </ChildContent>
+
+    <Aside>
+        <h3>Three answers, not two</h3>
+        <p>
+            Allowing once and allowing always are different decisions. Collapsing them into a single
+            button forces the user either to re-approve constantly or to grant more than they meant
+            to, so both are offered.
+        </p>
+        <CodeBlockView Language="csharp" Code="@Snippet" />
+        <p class="demo__note">
+            While a call waits, the turn is genuinely paused: the tool has not run, the model has not
+            been asked again, and cancelling the turn cancels the wait.
+        </p>
+    </Aside>
+</DemoPage>
+
+@code {
+    private ChatSession? _session;
+
+    [Inject] private IToolRegistry Tools { get; set; } = default!;
+    [Inject] private IToolApprovalPolicy Policy { get; set; } = default!;
+
+    protected override void OnInitialized() => _session = new ChatSession(
+        DemoToolTransports.CallsTool(
+            "delete_records",
+            """{"filter":"status = 'archived' AND updated < '2024-01-01'"}""",
+            "Deleted 128 archived records. Nothing else was touched."),
+        tools: Tools,
+        approvalPolicy: Policy);
+
+    private const string Snippet = """
+        AiTool.Create<DeleteArgs, DeleteResult>(
+            "delete_records",
+            "Permanently delete records matching a filter.",
+            DeleteAsync,
+            definition => definition with { Risk = ToolRisk.Destructive });
+        """;
+}

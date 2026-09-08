@@ -1,0 +1,33 @@
+@page "/errors"
+
+<DemoPage Title="Errors and retry"
+          Summary="The first attempt is rate limited. The failure is retryable, keeps the partial answer, and recovers on the second try.">
+    <ChildContent>
+        <AiChat Session="_session"
+                EmptyTitle="Send anything"
+                EmptyBody="The first request fails on purpose. Press Try again."
+                Suggestions="@(new[] { "Summarise the release notes" })" />
+    </ChildContent>
+
+    <Aside>
+        <h3>Failures are data</h3>
+        <p>
+            A transport reports failure as an <code>ErrorEvent</code> carrying an
+            <code>AiError</code>: a message safe to show, a machine-readable code, a kind, whether
+            retrying could help, and how long to wait. Components branch on that rather than on any
+            provider exception type.
+        </p>
+        <p>
+            An exception that escapes the transport is translated into the same shape, so an
+            unhandled failure still renders as a retryable error rather than tearing down the page.
+        </p>
+        <p class="demo__note">
+            Whatever had already streamed is kept. Losing a half-written answer to a network blip is
+            worse than showing it with a retry button underneath.
+        </p>
+    </Aside>
+</DemoPage>
+
+@code {
+    private readonly ChatSession _session = new(DemoInteractiveTransports.FailsThenRecovers());
+}

@@ -1,0 +1,140 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+@inject AiRendererRegistry Renderers
+
+@*
+    Renders one message part, and only re-renders itself when that part changes.
+
+    This component is where the framework's streaming performance comes from. It subscribes to the
+    part rather than the message, so a token arriving in the last paragraph of a long answer
+    re-renders one paragraph, not the tool cards, code blocks, and citations above it.
+*@
+
+@if (_custom is not null)
+{
+    <RendererBoundary Label="@($"The renderer for '{Part.Kind}' failed")">
+        @_custom
+    </RendererBoundary>
+}
+else
+{
+    @RenderBuiltIn()
+}
+
+@code {
+    private RenderFragment? _custom;
+    private MessagePart? _subscribed;
+
+    /// <summary>The part to render.</summary>
+    [Parameter, EditorRequired]
+    public MessagePart Part { get; set; } = default!;
+
+    /// <summary>The message the part belongs to.</summary>
+    [Parameter, EditorRequired]
+    public AiMessage Message { get; set; } = default!;
+
+    /// <summary>The conversation, when rendering inside one.</summary>
+    [Parameter]
+    public Conversation? Conversation { get; set; }
+
+    /// <summary>The session driving the conversation, when there is one.</summary>
+    [Parameter]
+    public ChatSession? Session { get; set; }
+
+    /// <summary>Raised when the user activates a citation inside this part.</summary>
+    [Parameter]
+    public EventCallback<Citation> OnCitationClick { get; set; }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        if (!ReferenceEquals(_subscribed, Part))
+        {
+            if (_subscribed is not null) _subscribed.Changed -= OnPartChanged;
+            _subscribed = Part;
+            _subscribed.Changed += OnPartChanged;
+        }
+
+        var renderer = Renderers.FindPart(Part.Kind);
+        _custom = renderer?.Invoke(new MessagePartContext(Part, Message, Conversation, Session));
+    }
+
+    private void OnPartChanged(MessagePart part) => RequestRender();
+
+    /// <inheritdoc />
+    protected override ValueTask DisposeCoreAsync()
+    {
+        if (_subscribed is not null) _subscribed.Changed -= OnPartChanged;
+        _subscribed = null;
+        return ValueTask.CompletedTask;
+    }
+
+    private RenderFragment RenderBuiltIn() => __builder =>
+    {
+        switch (Part)
+        {
+            case ReasoningPart reasoning:
+                <ReasoningPartView Part="reasoning" />
+                break;
+
+            case CodePart source:
+                <CodeBlockView Code="@source.Text"
+                               Language="@source.Language"
+                               FileName="@source.FileName"
+                               IsStreaming="@source.IsStreaming" />
+                break;
+
+            case TextPart prose:
+                <TextPartView Part="prose" Message="Message" OnCitationClick="OnCitationClick" />
+                break;
+
+            case ToolCallPart call:
+                <ToolCallView Call="call" Message="Message" Session="Session" />
+                break;
+
+            case ToolResultPart result:
+                <ToolResultView Part="result" />
+                break;
+
+            case ImagePart image:
+                <ImagePartView Part="image" />
+                break;
+
+            case FilePart file:
+                <AttachmentChip Attachment="file.Attachment" />
+                break;
+
+            case ArtifactPart artifact:
+                <ArtifactPartView Part="artifact" Conversation="Conversation" />
+                break;
+
+            case StructuredDataPart structured:
+                <StructuredDataView Part="structured" Message="Message" />
+                break;
+
+            case GenerativeUiPart generative:
+                <GenerativeUiView Part="generative" />
+                break;
+
+            case SourcesPart sources:
+                <SourceList Citations="Filter(sources)" />
+                break;
+
+            case ErrorPart error:
+                <ErrorView Error="error.Error" />
+                break;
+
+            default:
+                @if (Part is ITextualPart { Text: { Length: > 0 } fallback })
+                {
+                    <p>@fallback</p>
+                }
+                break;
+        }
+    };
+
+    private IReadOnlyList<Citation> Filter(SourcesPart part) =>
+        part.CitationIds is { Count: > 0 } ids
+            ? Message.Citations.Where(c => ids.Contains(c.CitationId)).ToArray()
+            : Message.Citations;
+}

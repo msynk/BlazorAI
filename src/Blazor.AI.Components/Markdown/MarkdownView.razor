@@ -1,0 +1,302 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    Renders a parsed Markdown document.
+
+    Takes an already-parsed document rather than a string so the caller decides how parsing happens:
+    StreamingMarkdown reuses an incremental parser across deltas, while a static caller parses once.
+    Raw HTML is escaped unless the host explicitly opts in, because model output is untrusted.
+*@
+
+@if (Document is { } document)
+{
+    <div class="bai-prose @Class">
+        @foreach (var block in document.Blocks)
+        {
+            @RenderBlock(block)
+        }
+    </div>
+}
+
+@code {
+    /// <summary>The document to render.</summary>
+    [Parameter]
+    public MarkdownDocument? Document { get; set; }
+
+    /// <summary>Citations that inline markers resolve against.</summary>
+    [Parameter]
+    public IReadOnlyList<Citation>? Citations { get; set; }
+
+    /// <summary>Raised when the user activates a citation marker.</summary>
+    [Parameter]
+    public EventCallback<Citation> OnCitationClick { get; set; }
+
+    /// <summary>Draw a caret after the last block while the document is still streaming.</summary>
+    [Parameter]
+    public bool ShowCaret { get; set; }
+
+    /// <summary>Extra CSS classes.</summary>
+    [Parameter]
+    public string? Class { get; set; }
+
+    private RenderFragment RenderBlock(MarkdownBlock block) => __builder =>
+    {
+        switch (block)
+        {
+            case ParagraphBlock paragraph:
+                <p>
+                    @RenderInlines(paragraph.Inlines)
+                    @if (ShowCaret && paragraph.IsOpen && Options.ShowStreamingCaret)
+                    {
+                        <span class="bai-caret" aria-hidden="true"></span>
+                    }
+                </p>
+                break;
+
+            case HeadingBlock heading:
+                @RenderHeading(heading)
+                break;
+
+            case CodeBlock fenced:
+                <CodeBlockView Code="@fenced.Code" Language="@fenced.Language" IsStreaming="@fenced.IsOpen" />
+                break;
+
+            case ListBlock list:
+                @RenderList(list)
+                break;
+
+            case QuoteBlock quote:
+                <blockquote>
+                    @foreach (var child in quote.Blocks)
+                    {
+                        @RenderBlock(child)
+                    }
+                </blockquote>
+                break;
+
+            case TableBlock table:
+                @RenderTable(table)
+                break;
+
+            case ThematicBreakBlock:
+                <hr />
+                break;
+
+            case MathBlock math:
+                <span class="bai-math bai-math--block">@math.Expression</span>
+                break;
+
+            case HtmlBlock html:
+                @if (Options.Markdown.AllowRawHtml)
+                {
+                    @((MarkupString)html.Html)
+                }
+                else
+                {
+                    <pre class="bai-code"><code>@html.Html</code></pre>
+                }
+                break;
+        }
+    };
+
+    private RenderFragment RenderHeading(HeadingBlock heading) => __builder =>
+    {
+        var tag = "h" + Math.Clamp(heading.Level + 1, 2, 6);
+        __builder.OpenElement(0, tag);
+        if (heading.Id is not null) __builder.AddAttribute(1, "id", heading.Id);
+        __builder.AddContent(2, RenderInlines(heading.Inlines));
+        __builder.CloseElement();
+    };
+
+    private RenderFragment RenderList(ListBlock list) => __builder =>
+    {
+        var isTask = list.Items.Exists(i => i.IsChecked is not null);
+        __builder.OpenElement(0, list.IsOrdered ? "ol" : "ul");
+        if (isTask) __builder.AddAttribute(1, "class", "bai-task-list");
+        if (list.IsOrdered && list.Start != 1) __builder.AddAttribute(2, "start", list.Start);
+
+        var key = 0;
+        foreach (var item in list.Items)
+        {
+            __builder.OpenElement(3, "li");
+            __builder.SetKey(key++);
+
+            if (item.IsChecked is { } state)
+            {
+                __builder.AddAttribute(4, "class", "bai-task-list__item");
+                __builder.OpenElement(5, "input");
+                __builder.AddAttribute(6, "type", "checkbox");
+                __builder.AddAttribute(7, "class", "bai-task-list__box");
+                __builder.AddAttribute(8, "checked", state);
+                __builder.AddAttribute(9, "disabled", true);
+                __builder.CloseElement();
+                __builder.OpenElement(10, "div");
+                foreach (var child in item.Blocks) __builder.AddContent(11, RenderBlock(child));
+                __builder.CloseElement();
+            }
+            else
+            {
+                foreach (var child in item.Blocks) __builder.AddContent(12, RenderBlock(child));
+            }
+
+            __builder.CloseElement();
+        }
+
+        __builder.CloseElement();
+    };
+
+    private RenderFragment RenderTable(TableBlock table) => __builder =>
+    {
+        <div class="bai-table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        @for (var i = 0; i < table.Header.Count; i++)
+                        {
+                            <th class="@AlignmentClass(table, i)">@RenderInlines(table.Header[i])</th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var row in table.Rows)
+                    {
+                        <tr>
+                            @for (var i = 0; i < row.Count; i++)
+                            {
+                                <td class="@AlignmentClass(table, i)">@RenderInlines(row[i])</td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    };
+
+    private static string? AlignmentClass(TableBlock table, int column) =>
+        column < table.Alignments.Count
+            ? table.Alignments[column] switch
+            {
+                ColumnAlignment.Center => "bai-align-center",
+                ColumnAlignment.Right => "bai-align-right",
+                _ => null,
+            }
+            : null;
+
+    private RenderFragment RenderInlines(IReadOnlyList<MarkdownInline> inlines) => __builder =>
+    {
+        foreach (var inline in inlines)
+        {
+            @RenderInline(inline)
+        }
+    };
+
+    private RenderFragment RenderInline(MarkdownInline inline) => __builder =>
+    {
+        switch (inline)
+        {
+            case TextInline text:
+                @text.Text
+                break;
+
+            case EmphasisInline emphasis when emphasis.IsStrong:
+                <strong>@RenderInlines(emphasis.Inlines)</strong>
+                break;
+
+            case EmphasisInline emphasis:
+                <em>@RenderInlines(emphasis.Inlines)</em>
+                break;
+
+            case StrikethroughInline strike:
+                <del>@RenderInlines(strike.Inlines)</del>
+                break;
+
+            case CodeInline span:
+                <code>@span.Code</code>
+                break;
+
+            case LinkInline link:
+                <a href="@Sanitize(link.Url)" target="_blank" rel="noopener noreferrer nofollow">@RenderInlines(link.Inlines)</a>
+                break;
+
+            case ImageInline image:
+                <img src="@SanitizeImage(image.Url)" alt="@image.Alt" title="@image.Title" loading="lazy" />
+                break;
+
+            case LineBreakInline { IsHard: true }:
+                <br />
+                break;
+
+            case LineBreakInline:
+                @(" ")
+                break;
+
+            case MathInline math:
+                <span class="bai-math">@math.Expression</span>
+                break;
+
+            case CitationMarkerInline marker:
+                @RenderCitation(marker)
+                break;
+
+            case RawHtmlInline html when Options.Markdown.AllowRawHtml:
+                @((MarkupString)html.Html)
+                break;
+
+            case RawHtmlInline html:
+                @html.Html
+                break;
+        }
+    };
+
+    private RenderFragment RenderCitation(CitationMarkerInline marker) => __builder =>
+    {
+        var citation = Citations?.FirstOrDefault(c => c.Number == marker.Number);
+        if (citation is null || !Options.InlineCitations)
+        {
+            __builder.AddContent(0, $"[{marker.Number}]");
+            return;
+        }
+
+        <CitationMarker Citation="citation" OnActivate="OnCitationClick" />
+    };
+
+    /// <summary>
+    /// Blocks link and image schemes that can execute script.
+    /// </summary>
+    /// <remarks>
+    /// A model can be persuaded to emit a javascript: URL. Allowing only known-safe schemes is
+    /// cheaper and more reliable than trying to detect the dangerous ones.
+    /// </remarks>
+    private static string Sanitize(string url)
+    {
+        var trimmed = url.TrimStart();
+        if (trimmed.Length == 0) return "#";
+
+        var colon = trimmed.IndexOf(':');
+        if (colon < 0) return url;
+
+        var slash = trimmed.IndexOfAny(['/', '?', '#']);
+        if (slash >= 0 && slash < colon) return url;
+
+        var scheme = trimmed[..colon];
+        return AllowedSchemes.Contains(scheme, StringComparer.OrdinalIgnoreCase) ? url : "#";
+    }
+
+    /// <summary>
+    /// Blocks image sources that can execute script, while still allowing inline image data URLs.
+    /// </summary>
+    /// <param name="url">The source to check.</param>
+    /// <returns>The source, or a blank data URL when the scheme is not safe.</returns>
+    private static string SanitizeImage(string url)
+    {
+        var trimmed = url.TrimStart();
+        if (trimmed.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase)) return url;
+        var safe = Sanitize(url);
+        return safe == "#" ? BlankImage : safe;
+    }
+
+    private const string BlankImage = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+
+    private static readonly string[] AllowedSchemes = ["http", "https", "mailto", "tel", "ftp"];
+}

@@ -1,0 +1,121 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    A code block with a language label, a copy button, and syntax highlighting.
+
+    Highlighting is deferred while the block is still streaming. Re-tokenising a growing block on
+    every delta is wasted work, and colours that shift as the lexer changes its mind about an
+    unterminated string are worse than no colours at all.
+*@
+
+<div class="bai-code @(Options.ShowLineNumbers ? "bai-code--numbered" : null) @Class">
+    @if (ShowHeader)
+    {
+        <div class="bai-code__header">
+            <span class="bai-code__language">@(FileName ?? Language ?? "text")</span>
+            @if (Options.ShowCodeCopy)
+            {
+                <CopyButton Content="@Code" />
+            }
+        </div>
+    }
+    <div class="bai-code__scroll">
+        <pre><code class="language-@(Language ?? "text")">@RenderCode()</code></pre>
+    </div>
+</div>
+
+@code {
+    private IReadOnlyList<CodeToken> _tokens = [];
+    private string? _tokenizedFor;
+    private string? _tokenizedLanguage;
+
+    /// <summary>The source to display.</summary>
+    [Parameter]
+    public string Code { get; set; } = string.Empty;
+
+    /// <summary>The language identifier used to pick a highlighter.</summary>
+    [Parameter]
+    public string? Language { get; set; }
+
+    /// <summary>A file name shown in place of the language.</summary>
+    [Parameter]
+    public string? FileName { get; set; }
+
+    /// <summary>Whether the block is still receiving content.</summary>
+    [Parameter]
+    public bool IsStreaming { get; set; }
+
+    /// <summary>Show the header bar with the language and copy button.</summary>
+    [Parameter]
+    public bool ShowHeader { get; set; } = true;
+
+    /// <summary>Extra CSS classes.</summary>
+    [Parameter]
+    public string? Class { get; set; }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        if (IsStreaming)
+        {
+            _tokens = [];
+            _tokenizedFor = null;
+            return;
+        }
+
+        if (ReferenceEquals(_tokenizedFor, Code) && _tokenizedLanguage == Language) return;
+
+        _tokens = SyntaxHighlighter.Highlight(Code, Language);
+        _tokenizedFor = Code;
+        _tokenizedLanguage = Language;
+    }
+
+    private RenderFragment RenderCode() => __builder =>
+    {
+        if (_tokens.Count == 0)
+        {
+            __builder.AddContent(0, Code);
+            return;
+        }
+
+        var position = 0;
+        var sequence = 1;
+
+        foreach (var token in _tokens)
+        {
+            if (token.Start > position)
+            {
+                __builder.AddContent(sequence++, Code[position..token.Start]);
+            }
+
+            __builder.OpenElement(sequence++, "span");
+            __builder.AddAttribute(sequence++, "class", ClassFor(token.Kind));
+            __builder.AddContent(sequence++, Code.Substring(token.Start, token.Length));
+            __builder.CloseElement();
+            position = token.Start + token.Length;
+        }
+
+        if (position < Code.Length) __builder.AddContent(sequence, Code[position..]);
+    };
+
+    private static string ClassFor(TokenKind kind) => kind switch
+    {
+        TokenKind.Keyword => "bai-tok-keyword",
+        TokenKind.Type => "bai-tok-type",
+        TokenKind.String => "bai-tok-string",
+        TokenKind.Number => "bai-tok-number",
+        TokenKind.Comment => "bai-tok-comment",
+        TokenKind.Function => "bai-tok-function",
+        TokenKind.Operator => "bai-tok-operator",
+        TokenKind.Punctuation => "bai-tok-punctuation",
+        TokenKind.Property => "bai-tok-property",
+        TokenKind.Tag => "bai-tok-tag",
+        TokenKind.Attribute => "bai-tok-attribute",
+        TokenKind.Constant => "bai-tok-constant",
+        TokenKind.Inserted => "bai-tok-inserted",
+        TokenKind.Deleted => "bai-tok-deleted",
+        TokenKind.Meta => "bai-tok-meta",
+        _ => "bai-tok-plain",
+    };
+}

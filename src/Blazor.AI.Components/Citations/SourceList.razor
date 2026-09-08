@@ -1,0 +1,46 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    The deduplicated list of sources a message cited, numbered to match the inline markers.
+*@
+
+@if (_sources.Count > 0)
+{
+    <div class="bai-sources">
+        @if (ShowHeading)
+        {
+            <div class="bai-tool__label">@Strings.Sources</div>
+        }
+        <div class="bai-sources__list">
+            @foreach (var (number, source) in _sources)
+            {
+                <SourceCard Source="source" Number="number" OnActivate="OnSourceClick" />
+            }
+        </div>
+    </div>
+}
+
+@code {
+    private List<(int Number, CitationSource Source)> _sources = [];
+
+    /// <summary>The citations to summarise.</summary>
+    [Parameter]
+    public IReadOnlyList<Citation>? Citations { get; set; }
+
+    /// <summary>Show the heading above the list.</summary>
+    [Parameter]
+    public bool ShowHeading { get; set; } = true;
+
+    /// <summary>Raised when the user activates a source card.</summary>
+    [Parameter]
+    public EventCallback<CitationSource> OnSourceClick { get; set; }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet() =>
+        _sources = (Citations ?? [])
+            .GroupBy(c => c.Source.SourceId, StringComparer.Ordinal)
+            .Select(g => (Number: g.Min(c => c.Number ?? int.MaxValue), Source: g.First().Source))
+            .OrderBy(x => x.Number)
+            .ToList();
+}

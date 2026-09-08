@@ -1,0 +1,73 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    A compact readout of what a generation cost: tokens, money, speed. Every field is optional,
+    because providers report different subsets and a row of blanks is worse than a short row.
+*@
+
+<span class="bai-usage" title="@Tooltip">
+    @if (Usage.TotalTokens is { } total)
+    {
+        <span>@Strings.FormatTokens(total) @Strings.Tokens</span>
+    }
+
+    @if (Usage.Cost is { } cost)
+    {
+        <span>@FormatCost(cost)</span>
+    }
+
+    @if (ShowSpeed && Metadata?.TokensPerSecond is { } rate)
+    {
+        <span>@($"{rate:0.#} tok/s")</span>
+    }
+
+    @if (ShowLatency && Metadata?.TimeToFirstToken is { } latency)
+    {
+        <span>@Strings.FormatDuration(latency)</span>
+    }
+</span>
+
+@code {
+    /// <summary>The usage to show.</summary>
+    [Parameter, EditorRequired]
+    public TokenUsage Usage { get; set; }
+
+    /// <summary>Generation metadata, which supplies speed and latency.</summary>
+    [Parameter]
+    public GenerationMetadata? Metadata { get; set; }
+
+    /// <summary>Show throughput in tokens per second.</summary>
+    [Parameter]
+    public bool ShowSpeed { get; set; } = true;
+
+    /// <summary>Show time to first token.</summary>
+    [Parameter]
+    public bool ShowLatency { get; set; }
+
+    private string Tooltip
+    {
+        get
+        {
+            var parts = new List<string>(4);
+            if (Usage.InputTokens is { } input) parts.Add($"Input: {input:N0}");
+            if (Usage.OutputTokens is { } output) parts.Add($"Output: {output:N0}");
+            if (Usage.CachedInputTokens is { } cached) parts.Add($"Cached: {cached:N0}");
+            if (Usage.ReasoningTokens is { } reasoning) parts.Add($"Reasoning: {reasoning:N0}");
+            return string.Join('\n', parts);
+        }
+    }
+
+    private string FormatCost(decimal cost)
+    {
+        var symbol = Usage.Currency switch
+        {
+            null or "USD" => "$",
+            "EUR" => "€",
+            "GBP" => "£",
+            _ => Usage.Currency + " ",
+        };
+
+        return cost < 0.01m ? $"{symbol}{cost:0.0000}" : $"{symbol}{cost:0.00}";
+    }
+}

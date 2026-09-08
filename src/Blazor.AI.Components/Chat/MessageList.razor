@@ -1,0 +1,240 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+@implements IDisposable
+@inject AiInterop Interop
+
+@*
+    The scrolling transcript.
+
+    Two behaviours make or break this component. Auto-scroll follows new content only while the user
+    is already at the bottom, so scrolling up to re-read is never yanked away. Virtualization turns
+    on only past a threshold, because below it the variable heights of chat messages make a
+    virtualized scrollbar jumpier than simply rendering everything.
+*@
+
+<div class="bai-chat__scroll" @ref="_scroll" role="log" aria-label="@AriaLabel" aria-live="polite" aria-relevant="additions">
+    <div class="bai-chat__content">
+        @if (Header is not null)
+        {
+            @Header
+        }
+
+        @if (_messages.Count == 0 && EmptyContent is not null)
+        {
+            @EmptyContent
+        }
+        else if (_virtualize)
+        {
+            <Virtualize Items="_messages" Context="message" ItemSize="220" OverscanCount="4" TItem="AiMessage">
+                @RenderMessage(message, false)
+            </Virtualize>
+        }
+        else
+        {
+            @foreach (var message in Rendered())
+            {
+                @RenderMessage(message, !_prerendering)
+            }
+        }
+
+        @if (Footer is not null)
+        {
+            @Footer
+        }
+    </div>
+</div>
+
+@code {
+    private readonly List<AiMessage> _messages = [];
+    private ElementReference _scroll;
+    private DotNetObjectReference<MessageList>? _self;
+    private Conversation? _subscribed;
+    private bool _virtualize;
+    private bool _prerendering;
+    private bool _pinned = true;
+    private bool _initialised;
+    private int _renderedCount;
+
+    /// <summary>The conversation to render.</summary>
+    [Parameter, EditorRequired]
+    public Conversation Conversation { get; set; } = default!;
+
+    /// <summary>The session driving it, which enables the message-level actions.</summary>
+    [Parameter]
+    public ChatSession? Session { get; set; }
+
+    /// <summary>Content rendered above the first message.</summary>
+    [Parameter]
+    public RenderFragment? Header { get; set; }
+
+    /// <summary>Content rendered below the last message.</summary>
+    [Parameter]
+    public RenderFragment? Footer { get; set; }
+
+    /// <summary>Content rendered instead of an empty list.</summary>
+    [Parameter]
+    public RenderFragment? EmptyContent { get; set; }
+
+    /// <summary>Replaces the built-in rendering of a message.</summary>
+    [Parameter]
+    public RenderFragment<AiMessage>? MessageTemplate { get; set; }
+
+    /// <summary>Hide messages the user did not write and the model did not produce.</summary>
+    [Parameter]
+    public bool HideSystemMessages { get; set; } = true;
+
+    /// <summary>The accessible name of the transcript region.</summary>
+    [Parameter]
+    public string AriaLabel { get; set; } = "Conversation";
+
+    /// <summary>Raised when the user activates a citation.</summary>
+    [Parameter]
+    public EventCallback<Citation> OnCitationClick { get; set; }
+
+    /// <summary>Raised when the user scrolls away from, or back to, the newest message.</summary>
+    [Parameter]
+    public EventCallback<bool> PinnedChanged { get; set; }
+
+    /// <summary>Whether the view is following new content.</summary>
+    public bool IsPinned => _pinned;
+
+    /// <summary>Scrolls to the newest message and resumes following.</summary>
+    /// <param name="smooth">Animate the scroll.</param>
+    /// <returns>A task that completes once the scroll has been requested.</returns>
+    public async Task ScrollToLatestAsync(bool smooth = true)
+    {
+        _pinned = true;
+        await Interop.InvokeVoidAsync("scrollToBottom", _scroll, smooth);
+        await PinnedChanged.InvokeAsync(true);
+    }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        if (ReferenceEquals(_subscribed, Conversation)) return;
+
+        Detach();
+        _subscribed = Conversation;
+        _subscribed.MessageAdded += OnMessageAdded;
+        _subscribed.MessageRemoved += OnMessageRemoved;
+        _subscribed.MessageUpdated += OnMessageUpdated;
+        Rebuild();
+        _initialised = false;
+    }
+
+    /// <inheritdoc />
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _self = DotNetObjectReference.Create(this);
+            await Interop.InvokeVoidAsync("observeScroll", _scroll, _self);
+            await Interop.InvokeVoidAsync("scrollToBottom", _scroll, false);
+            _initialised = true;
+            return;
+        }
+
+        if (!Options.AutoScroll || !_pinned || !_initialised) return;
+        if (_renderedCount == _messages.Count && !IsGenerating) return;
+
+        _renderedCount = _messages.Count;
+        await Interop.InvokeVoidAsync("scrollToBottom", _scroll, false);
+    }
+
+    private bool IsGenerating => _messages.Count > 0 && _messages[^1].IsBusy;
+
+    /// <summary>Called from the browser when the user scrolls to or away from the bottom.</summary>
+    /// <param name="pinned">Whether the view is at the bottom.</param>
+    /// <returns>A task that completes when the change has been applied.</returns>
+    [JSInvokable]
+    public async Task OnPinnedChanged(bool pinned)
+    {
+        if (_pinned == pinned) return;
+        _pinned = pinned;
+        await PinnedChanged.InvokeAsync(pinned);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void Rebuild()
+    {
+        _messages.Clear();
+        foreach (var message in Conversation.Messages)
+        {
+            if (HideSystemMessages && message.Role.IsSystem) continue;
+            _messages.Add(message);
+        }
+
+        UpdateVirtualization();
+    }
+
+    private void OnMessageAdded(Conversation conversation, AiMessage message)
+    {
+        if (HideSystemMessages && message.Role.IsSystem) return;
+        _messages.Add(message);
+        UpdateVirtualization();
+        RequestRender();
+    }
+
+    private void OnMessageRemoved(Conversation conversation, AiMessage message)
+    {
+        _messages.Remove(message);
+        UpdateVirtualization();
+        RequestRender();
+    }
+
+    private void OnMessageUpdated(Conversation conversation, AiMessage message)
+    {
+        // Only the last message can change the scroll height enough to matter while streaming;
+        // everything else is handled by the part components re-rendering themselves.
+        if (ReferenceEquals(message, _messages.Count > 0 ? _messages[^1] : null)) RequestRender();
+    }
+
+    private RenderFragment RenderMessage(AiMessage message, bool animate) => __builder =>
+    {
+        if (MessageTemplate is not null)
+        {
+            __builder.AddContent(0, MessageTemplate(message));
+            return;
+        }
+
+        <ChatMessage Message="message"
+                     Conversation="Conversation"
+                     Session="Session"
+                     Animate="@(animate && _initialised)"
+                     OnCitationClick="OnCitationClick"
+                     @key="message.MessageId" />
+    };
+
+    /// <summary>
+    /// Virtualization needs a measured viewport, which only exists once the component is
+    /// interactive. During static rendering a bounded tail is drawn instead, so a prerendered
+    /// transcript shows its most recent messages rather than an empty box.
+    /// </summary>
+    private void UpdateVirtualization()
+    {
+        _prerendering = !RendererInfo.IsInteractive;
+        _virtualize = !_prerendering && _messages.Count >= Options.VirtualizeThreshold;
+    }
+
+    private IEnumerable<AiMessage> Rendered() =>
+        _prerendering && _messages.Count > Options.VirtualizeThreshold
+            ? _messages.Skip(_messages.Count - Options.VirtualizeThreshold)
+            : _messages;
+
+    private void Detach()
+    {
+        if (_subscribed is null) return;
+        _subscribed.MessageAdded -= OnMessageAdded;
+        _subscribed.MessageRemoved -= OnMessageRemoved;
+        _subscribed.MessageUpdated -= OnMessageUpdated;
+        _subscribed = null;
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        Detach();
+        _self?.Dispose();
+        _self = null;
+    }
+}

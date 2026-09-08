@@ -1,0 +1,29 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    The button that appears when the user has scrolled away from the newest message. Only shown when
+    there is somewhere to go, so it never sits over the transcript doing nothing.
+*@
+
+@if (Visible)
+{
+    <button type="button" class="bai-btn bai-scroll-latest" @onclick="OnClick">
+        <AiIcon Name="arrow-down" />
+        <span>@(Label ?? Strings.ScrollToLatest)</span>
+    </button>
+}
+
+@code {
+    /// <summary>Whether to show the button.</summary>
+    [Parameter]
+    public bool Visible { get; set; }
+
+    /// <summary>Overrides the default label.</summary>
+    [Parameter]
+    public string? Label { get; set; }
+
+    /// <summary>Raised when the button is pressed.</summary>
+    [Parameter]
+    public EventCallback OnClick { get; set; }
+}

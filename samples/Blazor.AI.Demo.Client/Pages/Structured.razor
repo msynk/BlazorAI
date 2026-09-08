@@ -1,0 +1,34 @@
+@page "/structured"
+
+<DemoPage Title="Structured output"
+          Summary="A JSON array streamed a few characters at a time, rendered as a table that fills in row by row.">
+    <ChildContent>
+        <AiChat Session="_session"
+                EmptyTitle="Ask for a comparison"
+                Suggestions="@(new[] { "Compare our options" })" />
+    </ChildContent>
+
+    <Aside>
+        <h3>Readable before it is valid</h3>
+        <p>
+            For most of a generation the payload is syntactically invalid JSON. The framework repairs
+            the truncated document on every delta: open containers are closed, an incomplete trailing
+            key is dropped, and a partially written string value is kept.
+        </p>
+        <CodeBlockView Language="csharp" Code="@Snippet" />
+        <p class="demo__note">
+            Nothing is invented. Every value in the repaired document was present in the input, which
+            is why it is safe to bind straight to a typed model.
+        </p>
+    </Aside>
+</DemoPage>
+
+@code {
+    private readonly ChatSession _session = new(DemoContentTransports.Structured());
+
+    private const string Snippet = """
+        // {"items":[{"name":"Ac  ->  {"items":[{"name":"Ac"}]}
+        var value = PartialJson.TryParse(part.RawJson);
+        var typed = part.As<Options>();
+        """;
+}

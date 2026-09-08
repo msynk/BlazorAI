@@ -1,0 +1,22 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    Shown while the model is working but has produced nothing yet. Announced politely so a screen
+    reader user learns that a response is coming without having the announcement interrupt them.
+*@
+
+<div class="bai-thinking" role="status" aria-live="polite">
+    <span class="bai-thinking__dots" aria-hidden="true">
+        <span class="bai-thinking__dot"></span>
+        <span class="bai-thinking__dot"></span>
+        <span class="bai-thinking__dot"></span>
+    </span>
+    <span>@(Label ?? Strings.Thinking)</span>
+</div>
+
+@code {
+    /// <summary>Overrides the default label, for example with a tool-specific status.</summary>
+    [Parameter]
+    public string? Label { get; set; }
+}

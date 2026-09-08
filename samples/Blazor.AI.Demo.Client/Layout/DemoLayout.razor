@@ -1,0 +1,29 @@
+@namespace Blazor.AI.Demo.Client.Layout
+@inherits LayoutComponentBase
+
+<div class="demo">
+    <aside class="demo__nav">
+        <a class="demo__brand" href="">
+            <AiIcon Name="sparkle" />
+            <span>Blazor.AI</span>
+        </a>
+
+        <nav>
+            @foreach (var group in DemoIndex.Groups)
+            {
+                <div class="demo__group">@group.Key</div>
+                @foreach (var entry in group)
+                {
+                    <NavLink class="demo__link" href="@entry.Route" Match="NavLinkMatch.All">
+                        <span class="demo__index">@entry.Number</span>
+                        <span>@entry.Title</span>
+                    </NavLink>
+                }
+            }
+        </nav>
+    </aside>
+
+    <main class="demo__main">
+        @Body
+    </main>
+</div>

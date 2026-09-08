@@ -1,0 +1,110 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+@implements IDisposable
+@inject AiInterop Interop
+
+@*
+    Dictation using the browser speech API, with no server round trip and no audio leaving the
+    device.
+
+    The button hides itself entirely when the browser cannot transcribe, rather than showing a
+    control that does nothing when pressed.
+*@
+
+@if (_supported)
+{
+    <button type="button"
+            class="bai-btn bai-btn--icon @(_listening ? "bai-btn--active" : null)"
+            title="@(_listening ? Strings.StopDictation : Strings.StartDictation)"
+            aria-label="@(_listening ? Strings.StopDictation : Strings.StartDictation)"
+            aria-pressed="@(_listening ? "true" : "false")"
+            @onclick="ToggleAsync">
+        <AiIcon Name="mic" />
+    </button>
+}
+
+@code {
+    private DotNetObjectReference<VoiceInput>? _self;
+    private bool _supported;
+    private bool _listening;
+
+    /// <summary>Raised with each finalised phrase.</summary>
+    [Parameter]
+    public EventCallback<string> OnTranscript { get; set; }
+
+    /// <summary>Raised with the provisional text as the user speaks.</summary>
+    [Parameter]
+    public EventCallback<string> OnInterim { get; set; }
+
+    /// <summary>Raised when transcription fails, for example when the microphone is refused.</summary>
+    [Parameter]
+    public EventCallback<string> OnError { get; set; }
+
+    /// <summary>The recognition language. Defaults to the browser language.</summary>
+    [Parameter]
+    public string? Language { get; set; }
+
+    /// <summary>Whether dictation is running.</summary>
+    public bool IsListening => _listening;
+
+    /// <inheritdoc />
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        _self = DotNetObjectReference.Create(this);
+        _supported = await Interop.InvokeAsync<bool>("isDictationSupported");
+        if (_supported) StateHasChanged();
+    }
+
+    private async Task ToggleAsync()
+    {
+        if (_listening)
+        {
+            await Interop.InvokeVoidAsync("stopDictation");
+            _listening = false;
+            return;
+        }
+
+        _listening = await Interop.InvokeAsync<bool>("startDictation", _self, Language);
+    }
+
+    /// <summary>Called from the browser with recognised speech.</summary>
+    /// <param name="final">Text the recogniser has committed to.</param>
+    /// <param name="interim">Provisional text that may still change.</param>
+    /// <returns>A task that completes once the callbacks have run.</returns>
+    [JSInvokable]
+    public async Task OnTranscriptReceived(string final, string interim)
+    {
+        if (!string.IsNullOrWhiteSpace(final)) await OnTranscript.InvokeAsync(final.Trim());
+        if (!string.IsNullOrWhiteSpace(interim)) await OnInterim.InvokeAsync(interim);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>Called from the browser when transcription fails.</summary>
+    /// <param name="error">The reported error name.</param>
+    /// <returns>A task that completes once the callback has run.</returns>
+    [JSInvokable]
+    public async Task OnDictationError(string error)
+    {
+        _listening = false;
+        await OnError.InvokeAsync(error);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>Called from the browser when transcription stops on its own.</summary>
+    /// <returns>A task that completes once the state has been applied.</returns>
+    [JSInvokable]
+    public Task OnDictationEnded()
+    {
+        _listening = false;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        _self?.Dispose();
+        _self = null;
+    }
+}

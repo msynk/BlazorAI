@@ -1,0 +1,27 @@
+@page "/agent"
+
+<DemoPage Title="Multi-step agent"
+          Summary="A plan published up front, then executed step by step with timings and per-step summaries.">
+    <ChildContent>
+        <AiChat Session="_session"
+                EmptyTitle="Give it something to research"
+                Suggestions="@(new[] { "Do the sources agree on the mechanism?" })" />
+    </ChildContent>
+
+    <Aside>
+        <h3>A spinner is not an answer</h3>
+        <p>
+            An <code>AgentRun</code> holds the plan, the steps, their states, and the elapsed time.
+            The run is attached to the message that produced it, so scrolling back to an old answer
+            still shows what the agent did to produce it.
+        </p>
+        <p>
+            Plans are replaced rather than patched, because agents rewrite the tail of a plan as they
+            learn. Steps that keep their identifier keep their state and timings.
+        </p>
+    </Aside>
+</DemoPage>
+
+@code {
+    private readonly ChatSession _session = new(DemoAgentTransports.Research());
+}

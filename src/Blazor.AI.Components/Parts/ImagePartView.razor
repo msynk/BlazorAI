@@ -1,0 +1,27 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    An image with its intrinsic size declared where known, so the message list does not jump as
+    images decode during streaming.
+*@
+
+<figure style="margin:0">
+    <img src="@Part.Url"
+         alt="@(Part.Alt ?? string.Empty)"
+         width="@Part.Width"
+         height="@Part.Height"
+         loading="lazy"
+         decoding="async"
+         style="max-width:100%;height:auto;border-radius:var(--bai-radius)" />
+    @if (Part.Caption is { Length: > 0 } caption)
+    {
+        <figcaption class="bai-message__meta">@caption</figcaption>
+    }
+</figure>
+
+@code {
+    /// <summary>The image to render.</summary>
+    [Parameter, EditorRequired]
+    public ImagePart Part { get; set; } = default!;
+}

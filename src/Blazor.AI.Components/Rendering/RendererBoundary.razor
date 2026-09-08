@@ -1,0 +1,38 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    Contains a failure inside one custom renderer.
+
+    Custom renderers are handed data the model produced, which means they are handed shapes their
+    author did not anticipate. Without a boundary, one such shape throws during rendering and takes
+    the whole page with it. With one, the rest of the conversation survives and the reader sees which
+    piece failed.
+*@
+
+<ErrorBoundary @ref="_boundary">
+    <ChildContent>
+        @ChildContent
+    </ChildContent>
+    <ErrorContent Context="exception">
+        <div class="bai-chip" title="@exception.Message">
+            <AiIcon Name="alert" />
+            <span>@(Label ?? "This content could not be rendered")</span>
+        </div>
+    </ErrorContent>
+</ErrorBoundary>
+
+@code {
+    private ErrorBoundary? _boundary;
+
+    /// <summary>The content to protect.</summary>
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>What to say when the content fails.</summary>
+    [Parameter]
+    public string? Label { get; set; }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet() => _boundary?.Recover();
+}

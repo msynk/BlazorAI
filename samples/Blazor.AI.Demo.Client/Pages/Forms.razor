@@ -1,0 +1,62 @@
+@page "/forms"
+
+<DemoPage Title="AI forms"
+          Summary="The model proposes a form from a JSON Schema, the user corrects it, and the corrected values are what execute.">
+    <ChildContent>
+        <AiChat Session="_session"
+                EmptyTitle="Ask it to book something"
+                Suggestions="@(new[] { "Book a table for Friday" })">
+            <MessageTemplate>
+                <ChatMessage Message="context" Session="_session">
+                    @if (FormPart(context) is { } part)
+                    {
+                        <AiForm Definition="Definition(part)"
+                                Submitted="@_submitted"
+                                OnSubmit="OnSubmitAsync" />
+                    }
+                </ChatMessage>
+            </MessageTemplate>
+        </AiChat>
+    </ChildContent>
+
+    <Aside>
+        <h3>Confirmation, not guessing</h3>
+        <p>
+            The model produced a schema, not a booking. The form is built from that schema, validated
+            in the application rather than by the model, and only submits when it is valid.
+        </p>
+        @if (_values is { } values)
+        {
+            <h3>Submitted values</h3>
+            <ul>
+                @foreach (var (key, value) in values)
+                {
+                    <li><strong>@key</strong>: @value</li>
+                }
+            </ul>
+        }
+        <p class="demo__note">
+            Fields appear as the schema streams in. Anything already typed survives a new field
+            arriving.
+        </p>
+    </Aside>
+</DemoPage>
+
+@code {
+    private readonly ChatSession _session = new(DemoInteractiveTransports.ProposesForm());
+    private IReadOnlyDictionary<string, string?>? _values;
+    private bool _submitted;
+
+    private static StructuredDataPart? FormPart(AiMessage message) =>
+        message.PartsOf<StructuredDataPart>().FirstOrDefault(p => p.SchemaName == "booking_form");
+
+    private static AiFormDefinition Definition(StructuredDataPart part) =>
+        part.Value is { } schema ? AiFormDefinition.FromJsonSchema(schema) : new AiFormDefinition();
+
+    private Task OnSubmitAsync(IReadOnlyDictionary<string, string?> values)
+    {
+        _values = values;
+        _submitted = true;
+        return Task.CompletedTask;
+    }
+}

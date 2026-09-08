@@ -1,0 +1,50 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    The collapsed panel that holds model reasoning.
+
+    Open by default while the model is still thinking, so the user sees progress, and collapsed once
+    the answer arrives, so the reasoning does not compete with it.
+*@
+
+<AiCollapsible Class="bai-reasoning"
+               Open="@_open"
+               OpenChanged="@(open => _open = open)">
+    <Header>
+        <AiIcon Name="brain" />
+        <span class="bai-panel__title">@Title</span>
+        @if (Part.IsStreaming)
+        {
+            <span class="bai-thinking__dots" aria-hidden="true">
+                <span class="bai-thinking__dot"></span>
+                <span class="bai-thinking__dot"></span>
+                <span class="bai-thinking__dot"></span>
+            </span>
+        }
+    </Header>
+    <ChildContent>
+        @Part.Text
+    </ChildContent>
+</AiCollapsible>
+
+@code {
+    private bool _open;
+    private bool _initialised;
+
+    /// <summary>The reasoning to render.</summary>
+    [Parameter, EditorRequired]
+    public ReasoningPart Part { get; set; } = default!;
+
+    private string Title => Part.Duration is { } duration && !Part.IsStreaming
+        ? Strings.ReasonedFor(duration)
+        : Strings.Reasoning;
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        if (_initialised) return;
+        _initialised = true;
+        _open = Part.IsStreaming && !Options.CollapseReasoning;
+    }
+}

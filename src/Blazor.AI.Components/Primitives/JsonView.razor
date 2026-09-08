@@ -1,0 +1,166 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    A collapsible JSON tree.
+
+    Used wherever the framework has structured data and no better renderer: tool arguments, tool
+    results, structured outputs. Large containers start collapsed so a thousand-row result does not
+    push the rest of the conversation off screen.
+*@
+
+@if (Value is { } value)
+{
+    <div class="bai-json @Class">
+        @RenderValue(value, null, 0)
+    </div>
+}
+
+@code {
+    private readonly HashSet<string> _collapsed = new(StringComparer.Ordinal);
+
+    /// <summary>The value to render.</summary>
+    [Parameter]
+    public JsonElement? Value { get; set; }
+
+    /// <summary>How deep to expand before collapsing by default.</summary>
+    [Parameter]
+    public int DefaultExpandDepth { get; set; } = 2;
+
+    /// <summary>Containers with more entries than this start collapsed regardless of depth.</summary>
+    [Parameter]
+    public int LargeContainerSize { get; set; } = 24;
+
+    /// <summary>Extra CSS classes.</summary>
+    [Parameter]
+    public string? Class { get; set; }
+
+    private RenderFragment RenderValue(JsonElement value, string? name, int depth) => builder =>
+    {
+        var path = name is null ? depth.ToString() : $"{depth}:{name}";
+        var indent = $"padding-left:{depth * 1.1:0.##}rem";
+
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.Object:
+            case JsonValueKind.Array:
+            {
+                var count = value.ValueKind is JsonValueKind.Object
+                    ? value.EnumerateObject().Count()
+                    : value.GetArrayLength();
+
+                var open = !_collapsed.Contains(path) && depth < DefaultExpandDepth && count <= LargeContainerSize;
+                if (_collapsed.Contains(path)) open = false;
+                else if (_expanded.Contains(path)) open = true;
+
+                var braces = value.ValueKind is JsonValueKind.Object ? ("{", "}") : ("[", "]");
+
+                builder.OpenElement(0, "span");
+                builder.AddAttribute(1, "class", "bai-json__row");
+                builder.AddAttribute(2, "style", indent);
+
+                builder.OpenElement(3, "button");
+                builder.AddAttribute(4, "type", "button");
+                builder.AddAttribute(5, "class", "bai-json__toggle");
+                builder.AddAttribute(6, "aria-expanded", open ? "true" : "false");
+                builder.AddAttribute(7, "onclick", EventCallback.Factory.Create(this, () => Toggle(path, open)));
+                builder.AddContent(8, open ? "-" : "+");
+                builder.CloseElement();
+
+                if (name is not null)
+                {
+                    builder.OpenElement(9, "span");
+                    builder.AddAttribute(10, "class", "bai-json__key");
+                    builder.AddContent(11, $"\"{name}\"");
+                    builder.CloseElement();
+                    builder.AddContent(12, ": ");
+                }
+
+                builder.AddContent(13, open ? braces.Item1 : $"{braces.Item1} {count} {braces.Item2}");
+                builder.CloseElement();
+
+                if (open)
+                {
+                    if (value.ValueKind is JsonValueKind.Object)
+                    {
+                        foreach (var property in value.EnumerateObject())
+                        {
+                            builder.AddContent(14, RenderValue(property.Value, property.Name, depth + 1));
+                        }
+                    }
+                    else
+                    {
+                        var index = 0;
+                        foreach (var item in value.EnumerateArray())
+                        {
+                            builder.AddContent(15, RenderValue(item, null, depth + 1));
+                            index++;
+                        }
+                    }
+
+                    builder.OpenElement(16, "span");
+                    builder.AddAttribute(17, "class", "bai-json__row");
+                    builder.AddAttribute(18, "style", indent);
+                    builder.AddContent(19, braces.Item2);
+                    builder.CloseElement();
+                }
+
+                break;
+            }
+
+            default:
+            {
+                builder.OpenElement(20, "span");
+                builder.AddAttribute(21, "class", "bai-json__row");
+                builder.AddAttribute(22, "style", indent);
+
+                if (name is not null)
+                {
+                    builder.OpenElement(23, "span");
+                    builder.AddAttribute(24, "class", "bai-json__key");
+                    builder.AddContent(25, $"\"{name}\"");
+                    builder.CloseElement();
+                    builder.AddContent(26, ": ");
+                }
+
+                builder.OpenElement(27, "span");
+                builder.AddAttribute(28, "class", ScalarClass(value.ValueKind));
+                builder.AddContent(29, Scalar(value));
+                builder.CloseElement();
+                builder.CloseElement();
+                break;
+            }
+        }
+    };
+
+    private readonly HashSet<string> _expanded = new(StringComparer.Ordinal);
+
+    private void Toggle(string path, bool wasOpen)
+    {
+        if (wasOpen)
+        {
+            _expanded.Remove(path);
+            _collapsed.Add(path);
+        }
+        else
+        {
+            _collapsed.Remove(path);
+            _expanded.Add(path);
+        }
+    }
+
+    private static string ScalarClass(JsonValueKind kind) => kind switch
+    {
+        JsonValueKind.String => "bai-json__string",
+        JsonValueKind.Number => "bai-json__number",
+        JsonValueKind.True or JsonValueKind.False => "bai-json__bool",
+        _ => "bai-json__null",
+    };
+
+    private static string Scalar(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.String => $"\"{value.GetString()}\"",
+        JsonValueKind.Null or JsonValueKind.Undefined => "null",
+        _ => value.ToString(),
+    };
+}
