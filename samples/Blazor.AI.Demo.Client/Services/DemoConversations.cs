@@ -63,7 +63,7 @@ public static class DemoConversations
                             new { title = "Circuit lifetime", score = 0.81 },
                         },
                     }));
-                    assistant.AddPart(new TextPart("Three passages matched, all saying the same thing."));
+                    assistant.AddPart(new TextPart("Two passages matched, and they say the same thing."));
                     break;
 
                 default:

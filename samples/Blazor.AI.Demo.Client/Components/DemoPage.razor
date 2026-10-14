@@ -1,14 +1,40 @@
 @namespace Blazor.AI.Demo.Client.Components
 
 @*
-    The frame around each demo: a title, a sentence about what it shows, and the demo itself.
+    The frame around each demo: a title, a sentence about what it shows, the way through the tour,
+    and the demo itself.
 *@
 
 <PageTitle>@Title — Blazor.AI</PageTitle>
 
 <header class="demo__header">
-    <h1>@Title</h1>
-    <p>@Summary</p>
+    <div class="demo__heading">
+        <h1>@Title</h1>
+        <p>@Summary</p>
+    </div>
+
+    @if (_page is { } entry)
+    {
+        <nav class="demo__tour" aria-label="Tour">
+            <a class="bai-btn bai-btn--outline" href="@(DemoIndex.SourceRoot + entry.Source)" target="_blank" rel="noopener">
+                <AiIcon Name="code" />
+                <span>Source</span>
+            </a>
+            <span class="demo__position">@entry.Number / @DemoIndex.Pages.Count</span>
+            @if (DemoIndex.Previous(entry) is { } previous)
+            {
+                <a class="bai-btn bai-btn--icon" href="@previous.Route" title="Previous: @previous.Title" aria-label="Previous: @previous.Title">
+                    <AiIcon Name="chevron-right" Class="demo__flip" />
+                </a>
+            }
+            @if (DemoIndex.Next(entry) is { } next)
+            {
+                <a class="bai-btn bai-btn--icon" href="@next.Route" title="Next: @next.Title" aria-label="Next: @next.Title">
+                    <AiIcon Name="chevron-right" />
+                </a>
+            }
+        </nav>
+    }
 </header>
 
 <div class="demo__body">
@@ -18,13 +44,17 @@
 
     @if (Aside is not null)
     {
-        <aside class="demo__aside">
+        <aside class="demo__aside" aria-label="About this demo">
             @Aside
         </aside>
     }
 </div>
 
 @code {
+    private DemoEntry? _page;
+
+    [Inject] private NavigationManager Navigation { get; set; } = default!;
+
     /// <summary>The page heading.</summary>
     [Parameter, EditorRequired]
     public string Title { get; set; } = string.Empty;
@@ -40,4 +70,7 @@
     /// <summary>Optional explanatory panel beside the demo.</summary>
     [Parameter]
     public RenderFragment? Aside { get; set; }
+
+    protected override void OnParametersSet() =>
+        _page = DemoIndex.Find(Navigation.ToBaseRelativePath(Navigation.Uri));
 }

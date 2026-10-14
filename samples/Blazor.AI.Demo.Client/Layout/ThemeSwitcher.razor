@@ -1,0 +1,54 @@
+@namespace Blazor.AI.Demo.Client.Layout
+
+@*
+    Switches the colour scheme for the whole page by setting data-bai-theme on the root element,
+    which is one of the three ways the framework stylesheet picks a theme. The choice is stored in
+    the browser and applied before first paint by a script in App.razor.
+*@
+
+<div class="demo__theme" role="radiogroup" aria-label="Colour scheme">
+    @foreach (var (value, label) in Options)
+    {
+        <button type="button"
+                role="radio"
+                aria-checked="@(_theme == value ? "true" : "false")"
+                class="demo__theme-option @(_theme == value ? "demo__theme-option--active" : null)"
+                @onclick="() => SetAsync(value)">
+            @label
+        </button>
+    }
+</div>
+
+@code {
+    private static readonly (string Value, string Label)[] Options =
+    [
+        ("system", "System"),
+        ("light", "Light"),
+        ("dark", "Dark"),
+    ];
+
+    private string _theme = "system";
+
+    [Inject] private IJSRuntime JS { get; set; } = default!;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        try
+        {
+            _theme = await JS.InvokeAsync<string>("demoTheme.get");
+            StateHasChanged();
+        }
+        catch (JSException)
+        {
+            // The host page did not define the helper; the switcher simply starts at System.
+        }
+    }
+
+    private async Task SetAsync(string theme)
+    {
+        _theme = theme;
+        await JS.InvokeVoidAsync("demoTheme.set", theme);
+    }
+}

@@ -1,4 +1,5 @@
 @page "/agent"
+@implements IAsyncDisposable
 
 <DemoPage Title="Multi-step agent"
           Summary="A plan published up front, then executed step by step with timings and per-step summaries.">
@@ -24,4 +25,6 @@
 
 @code {
     private readonly ChatSession _session = new(DemoAgentTransports.Research());
+
+    public ValueTask DisposeAsync() => _session.DisposeAsync();
 }

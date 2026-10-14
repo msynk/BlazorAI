@@ -1,4 +1,5 @@
 @page "/attachments"
+@implements IAsyncDisposable
 
 <DemoPage Title="Attachments"
           Summary="Pick, drag, or paste files into the composer. Images preview; everything else gets a card.">
@@ -34,4 +35,6 @@
     [Inject] private ChatSessionFactory Sessions { get; set; } = default!;
 
     protected override void OnInitialized() => _session = Sessions.Create();
+
+    public ValueTask DisposeAsync() => _session?.DisposeAsync() ?? ValueTask.CompletedTask;
 }

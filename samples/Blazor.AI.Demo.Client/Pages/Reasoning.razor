@@ -1,4 +1,5 @@
 @page "/reasoning"
+@implements IAsyncDisposable
 
 <DemoPage Title="Reasoning"
           Summary="Model thinking, shown in its own collapsed panel and kept out of the answer, the copy, and the next prompt.">
@@ -25,4 +26,6 @@
 
 @code {
     private readonly ChatSession _session = new(DemoTransports.Reasoning());
+
+    public ValueTask DisposeAsync() => _session.DisposeAsync();
 }

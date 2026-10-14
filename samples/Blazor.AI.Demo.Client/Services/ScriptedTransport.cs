@@ -79,6 +79,25 @@ public static class Script
         return string.Empty;
     }
 
+    /// <summary>Whether a tool has already returned a result since the most recent user message.</summary>
+    /// <param name="request">The request to read.</param>
+    /// <returns><see langword="true"/> when this turn already ran a tool and the model should answer.</returns>
+    /// <remarks>
+    /// Scoped to the current turn, so a follow-up question calls the tool again instead of answering
+    /// from a result an earlier turn produced.
+    /// </remarks>
+    public static bool HasToolResultThisTurn(AiRequest request)
+    {
+        for (var i = request.Messages.Count - 1; i >= 0; i--)
+        {
+            var message = request.Messages[i];
+            if (message.Role.IsUser) return false;
+            if (message.Parts.OfType<ToolCallPart>().Any(c => c.Result is not null)) return true;
+        }
+
+        return false;
+    }
+
     /// <summary>Reports plausible token usage for a generated response.</summary>
     /// <param name="request">The request, used to size the prompt.</param>
     /// <param name="output">The generated text.</param>

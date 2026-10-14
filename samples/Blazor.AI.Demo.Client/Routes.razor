@@ -1,8 +1,12 @@
-<Router AppAssembly="typeof(Program).Assembly"
-        AdditionalAssemblies="new[] { typeof(Client._Imports).Assembly }"
-        NotFoundPage="typeof(Pages.NotFound)">
+@*
+    Lives in the client project because it is rendered with InteractiveAuto: once the WebAssembly
+    runtime is cached, the browser has to be able to load this type, and it only has the client
+    assembly. Pages that must stay on the server opt out with [ExcludeFromInteractiveRouting].
+*@
+
+<Router AppAssembly="typeof(Program).Assembly" NotFoundPage="typeof(Pages.NotFound)">
     <Found Context="routeData">
-        <RouteView RouteData="routeData" DefaultLayout="typeof(Blazor.AI.Demo.Client.Layout.DemoLayout)" />
+        <RouteView RouteData="routeData" DefaultLayout="typeof(Layout.DemoLayout)" />
         <FocusOnNavigate RouteData="routeData" Selector="h1" />
     </Found>
 </Router>

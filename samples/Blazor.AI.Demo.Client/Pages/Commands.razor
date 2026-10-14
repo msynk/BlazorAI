@@ -1,0 +1,85 @@
+@page "/commands"
+@implements IAsyncDisposable
+
+<DemoPage Title="Commands and mentions"
+          Summary="Type a slash for commands, or an at sign to reference a file, a person, or a data source.">
+    <ChildContent>
+        <AiChat Session="_session"
+                Commands="_commands"
+                Mentions="_mentions"
+                Placeholder="Type / for commands, @@ to reference something"
+                EmptyTitle="Try a slash or an at sign"
+                EmptyBody="Start a message with / to pick a command, or type @@ anywhere to reference a file or a person."
+                Suggestions="@(new[] { "Compare @roadmap.md with @pricing.xlsx", "Ask @priya about the launch date" })" />
+    </ChildContent>
+
+    <Aside>
+        <h3>Two kinds of command</h3>
+        <p>
+            A command with a <code>Template</code> inserts text into the composer, which suits prompt
+            shortcuts. A command with a <code>Handler</code> runs application code instead, so
+            <code>/clear</code> and <code>/regenerate</code> never reach the model at all.
+        </p>
+        <CodeBlockView Language="csharp" Code="@Snippet" />
+        <p>
+            Mentions are offered from a list the application supplies. The composer inserts the
+            label; resolving it to content is the application's job, done by identifier rather than
+            by asking the model to guess.
+        </p>
+        <p class="demo__note">
+            Arrow keys move through the menu, Enter or Tab accepts, and Escape closes it.
+        </p>
+    </Aside>
+</DemoPage>
+
+@code {
+    private readonly ChatSession _session = new(DemoInteractiveTransports.Commands());
+    private IReadOnlyList<SlashCommand> _commands = [];
+
+    private readonly IReadOnlyList<MentionItem> _mentions =
+    [
+        new("file-roadmap", "roadmap.md", "Product roadmap, updated Monday", "file"),
+        new("file-pricing", "pricing.xlsx", "Pricing model, three tiers", "file"),
+        new("user-priya", "priya", "Priya Raman, product lead", "user"),
+        new("user-tomas", "tomas", "Tomás Silva, engineering", "user"),
+        new("source-analytics", "analytics", "Usage analytics, last 30 days", "layers"),
+    ];
+
+    protected override void OnInitialized() => _commands =
+    [
+        new("summarize", "Summarize the conversation so far", "sparkle")
+        {
+            Template = "Summarize the conversation so far in three bullet points.",
+        },
+        new("explain", "Explain something for a newcomer", "brain")
+        {
+            Template = "Explain this as if I were new to the codebase: ",
+        },
+        new("regenerate", "Write the last answer again", "refresh")
+        {
+            Handler = async () => await _session.RegenerateAsync(),
+        },
+        new("clear", "Start over with an empty conversation", "trash")
+        {
+            Handler = () =>
+            {
+                _session.Stop();
+                _session.Conversation.Clear();
+                return Task.CompletedTask;
+            },
+        },
+    ];
+
+    private const string Snippet = """
+        new SlashCommand("summarize", "Summarize so far")
+        {
+            Template = "Summarize the conversation so far.",
+        },
+        new SlashCommand("clear", "Start over")
+        {
+            Handler = () => { conversation.Clear(); return Task.CompletedTask; },
+        },
+        """;
+
+    public ValueTask DisposeAsync() => _session.DisposeAsync();
+}

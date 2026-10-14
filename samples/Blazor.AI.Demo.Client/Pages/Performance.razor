@@ -1,4 +1,5 @@
 @page "/performance"
+@implements IAsyncDisposable
 
 <DemoPage Title="Long conversations"
           Summary="Five hundred messages with code, tables, tool calls, and citations, rendered through a virtualized list.">
@@ -43,4 +44,6 @@
         var conversation = DemoConversations.Long(500);
         _session = Sessions.Create(conversation);
     }
+
+    public ValueTask DisposeAsync() => _session?.DisposeAsync() ?? ValueTask.CompletedTask;
 }

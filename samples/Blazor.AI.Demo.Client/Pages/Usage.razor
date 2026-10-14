@@ -1,4 +1,5 @@
 @page "/usage"
+@implements IAsyncDisposable
 
 <DemoPage Title="Models and usage"
           Summary="A model picker in the composer, and real accounting under each answer: tokens, cost, throughput, and context used.">
@@ -60,10 +61,14 @@
         Rebuild();
     }
 
-    private void OnModelSelected(AiModel model)
+    private async Task OnModelSelected(AiModel model)
     {
         _model = model;
+        var previous = _session;
         Rebuild();
+
+        // The conversation carries over to the new session; the old one only has to stop.
+        if (previous is not null) await previous.DisposeAsync();
     }
 
     private void Rebuild()
@@ -79,4 +84,6 @@
                 RequestOptions = new AiRequestOptions { ModelId = _model.ModelId, Temperature = 0.7 },
             });
     }
+
+    public ValueTask DisposeAsync() => _session?.DisposeAsync() ?? ValueTask.CompletedTask;
 }

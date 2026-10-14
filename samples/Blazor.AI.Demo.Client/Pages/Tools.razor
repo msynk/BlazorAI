@@ -1,4 +1,5 @@
 @page "/tools"
+@implements IAsyncDisposable
 
 <DemoPage Title="Tool calling"
           Summary="The model asks for a tool, the framework runs it, feeds the result back, and the model answers.">
@@ -44,4 +45,6 @@
                 "Look up the current weather for a city.",
                 (args, token) => weather.GetAsync(args.City, token)));
         """;
+
+    public ValueTask DisposeAsync() => _session?.DisposeAsync() ?? ValueTask.CompletedTask;
 }

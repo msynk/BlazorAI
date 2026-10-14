@@ -1,0 +1,39 @@
+@page "/"
+
+<PageTitle>Blazor.AI — the demo</PageTitle>
+
+<div class="demo__page demo__overview">
+    <header class="demo__hero">
+        <h1>The AI UI layer for Blazor</h1>
+        <p>
+            Conversations, streaming Markdown, tools, agents, artifacts, and generative UI, as
+            ordinary Blazor components. Every reply in this tour comes from a scripted
+            <code>IAiTransport</code> written in C#, so nothing here needs an API key, and nothing
+            downstream of the transport can tell the difference.
+        </p>
+        <div class="demo__hero-actions">
+            <a class="bai-btn bai-btn--primary" href="basic">Start the tour</a>
+            <a class="bai-btn bai-btn--outline" href="https://github.com/msynk/BlazorAI" target="_blank" rel="noopener">
+                <AiIcon Name="external" />
+                <span>GitHub</span>
+            </a>
+        </div>
+    </header>
+
+    @foreach (var group in DemoIndex.Groups)
+    {
+        <section class="demo__section" aria-labelledby="group-@group.Key">
+            <h2 id="group-@group.Key">@group.Key</h2>
+            <div class="demo__cards">
+                @foreach (var entry in group)
+                {
+                    <a class="demo__card" href="@entry.Route.TrimStart('/')">
+                        <span class="demo__card-number">@entry.Number</span>
+                        <span class="demo__card-title">@entry.Title</span>
+                        <span class="demo__card-summary">@entry.Summary</span>
+                    </a>
+                }
+            </div>
+        </section>
+    }
+</div>

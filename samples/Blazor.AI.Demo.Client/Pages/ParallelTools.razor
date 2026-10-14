@@ -1,4 +1,5 @@
 @page "/parallel-tools"
+@implements IAsyncDisposable
 
 <DemoPage Title="Parallel tools"
           Summary="Two calls in flight at once, each with its own card, status, and timing.">
@@ -30,4 +31,6 @@
 
     protected override void OnInitialized() =>
         _session = new ChatSession(DemoToolTransports.CallsTwoTools(), tools: Tools);
+
+    public ValueTask DisposeAsync() => _session?.DisposeAsync() ?? ValueTask.CompletedTask;
 }

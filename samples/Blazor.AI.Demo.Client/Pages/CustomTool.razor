@@ -1,4 +1,5 @@
 @page "/custom-tool"
+@implements IAsyncDisposable
 
 <DemoPage Title="Custom tool UI"
           Summary="One tool rendered by an application component instead of the default card, everywhere that tool appears.">
@@ -39,4 +40,6 @@
         services.ConfigureAiRenderers(renderers =>
             renderers.RegisterTool<SearchResultCard>("search_docs"));
         """;
+
+    public ValueTask DisposeAsync() => _session?.DisposeAsync() ?? ValueTask.CompletedTask;
 }

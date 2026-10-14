@@ -1,4 +1,5 @@
 @page "/artifacts"
+@implements IAsyncDisposable
 
 <DemoPage Title="Artifacts"
           Summary="A document written into its own panel, then revised on the next turn with the earlier version kept.">
@@ -25,4 +26,6 @@
 
 @code {
     private readonly ChatSession _session = new(DemoContentTransports.Artifacts());
+
+    public ValueTask DisposeAsync() => _session.DisposeAsync();
 }

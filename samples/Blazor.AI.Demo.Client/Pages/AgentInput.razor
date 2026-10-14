@@ -1,4 +1,5 @@
 @page "/agent-input"
+@implements IAsyncDisposable
 
 <DemoPage Title="Agent asks a question"
           Summary="A run that blocks mid-plan, offers suggested answers, and resumes from where it stopped.">
@@ -24,4 +25,6 @@
 
 @code {
     private readonly ChatSession _session = new(DemoAgentTransports.AsksForInput());
+
+    public ValueTask DisposeAsync() => _session.DisposeAsync();
 }

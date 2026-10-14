@@ -1,5 +1,5 @@
-@page "/"
 @page "/basic"
+@implements IAsyncDisposable
 
 <DemoPage Title="Basic chat"
           Summary="A working chat in three lines of markup. The session comes from the registered transport, and everything else is default behaviour.">
@@ -40,9 +40,10 @@
     protected override void OnInitialized() => _session = Sessions.Create();
 
     private const string Snippet = """
-        <ChildContent>
         <AiChat Session="_session"
                 EmptyTitle="Ask me anything"
                 Suggestions="_suggestions" />
         """;
+
+    public ValueTask DisposeAsync() => _session?.DisposeAsync() ?? ValueTask.CompletedTask;
 }

@@ -1,4 +1,5 @@
 @page "/approval"
+@implements IAsyncDisposable
 
 <DemoPage Title="Tool approval"
           Summary="A destructive tool stops and waits for a human. Allow once, allow always, or decline.">
@@ -45,4 +46,6 @@
             DeleteAsync,
             definition => definition with { Risk = ToolRisk.Destructive });
         """;
+
+    public ValueTask DisposeAsync() => _session?.DisposeAsync() ?? ValueTask.CompletedTask;
 }

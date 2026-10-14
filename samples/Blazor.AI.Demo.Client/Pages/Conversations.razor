@@ -1,24 +1,26 @@
 @page "/conversations"
+@implements IAsyncDisposable
 
 <DemoPage Title="Multiple conversations"
           Summary="A sidebar over a conversation store, grouped by recency, with new, switch, and delete.">
     <ChildContent>
-        <div style="display:flex;height:100%;min-height:0">
-            <div style="width:15rem;flex:none;border-right:1px solid var(--bai-color-border);display:flex;flex-direction:column">
+        <div class="demo__split">
+            <div class="demo__split-list">
                 <ConversationList Conversations="_summaries"
                                   SelectedId="@_session?.Conversation.ConversationId"
-                                  OnSelect="OpenAsync"
+                                  OnSelect="SelectAsync"
                                   OnDelete="DeleteAsync"
-                                  OnNew="NewConversation" />
+                                  OnNew="NewConversationAsync" />
             </div>
 
             @if (_session is not null)
             {
-                <div style="flex:1 1 auto;min-width:0">
+                <div class="demo__split-chat">
                     <AiChat Session="_session"
                             @key="_session.Conversation.ConversationId"
                             EmptyTitle="New conversation"
-                            EmptyBody="Send a message and this thread will appear in the list." />
+                            EmptyBody="Send a message and this thread will appear in the list."
+                            Suggestions="@(new[] { "Plan a weekend in Lisbon", "Draft a release note" })" />
                 </div>
             }
         </div>
@@ -29,59 +31,142 @@
         <p>
             A <code>Conversation</code> is a plain observable object, and a <code>ChatSession</code>
             drives one of them. Switching threads means pointing the chat at a different conversation,
-            not tearing anything down.
+            not tearing anything down: start a long reply, switch away, and come back to find it
+            still streaming.
         </p>
         <p>
-            Persistence is an interface. This demo uses the in-memory store; a real application
-            implements <code>IConversationStore</code> over its own database.
+            Persistence is an interface. This page saves through <code>IConversationStore</code>,
+            registered here as the in-memory store; a real application implements it over its own
+            database.
+        </p>
+        <CodeBlockView Language="csharp" Code="@Snippet" />
+        <p class="demo__note">
+            A new thread is saved when its first message arrives, so pressing New twice does not
+            leave an empty conversation in the list.
         </p>
     </Aside>
 </DemoPage>
 
 @code {
-    private readonly List<Conversation> _conversations = [];
+    // One live session per thread, so a reply keeps streaming while another thread is open.
+    private readonly Dictionary<string, ChatSession> _sessions = new(StringComparer.Ordinal);
     private IReadOnlyList<ConversationSummary> _summaries = [];
     private ChatSession? _session;
 
     [Inject] private ChatSessionFactory Sessions { get; set; } = default!;
+    [Inject] private IConversationStore Store { get; set; } = default!;
 
-    protected override void OnInitialized() => NewConversation();
-
-    private void NewConversation()
+    protected override async Task OnInitializedAsync()
     {
-        var conversation = new Conversation();
-        conversation.Changed += _ => Refresh();
-        _conversations.Insert(0, conversation);
+        _summaries = await Store.ListAsync();
 
-        _session = Sessions.Create(conversation);
-        Refresh();
+        if (_summaries.Count > 0 && await Store.LoadAsync(_summaries[0].ConversationId) is Conversation latest)
+        {
+            Open(latest);
+        }
+        else
+        {
+            Open(new Conversation());
+        }
     }
 
-    private void OpenAsync(ConversationSummary summary)
+    private Task NewConversationAsync()
     {
-        var conversation = _conversations.FirstOrDefault(c => c.ConversationId == summary.ConversationId);
-        if (conversation is null) return;
+        // Reuse an untouched thread rather than stacking empty ones.
+        if (_session?.Conversation.Messages.Count == 0) return Task.CompletedTask;
 
-        _session = Sessions.Create(conversation);
-        Refresh();
+        Open(new Conversation());
+        return Task.CompletedTask;
     }
 
-    private void DeleteAsync(ConversationSummary summary)
+    private async Task SelectAsync(ConversationSummary summary)
     {
-        _conversations.RemoveAll(c => c.ConversationId == summary.ConversationId);
+        if (summary.ConversationId == _session?.Conversation.ConversationId) return;
+
+        if (await Store.LoadAsync(summary.ConversationId) is Conversation conversation)
+        {
+            Open(conversation);
+        }
+    }
+
+    private async Task DeleteAsync(ConversationSummary summary)
+    {
+        await Store.DeleteAsync(summary.ConversationId);
+
+        if (_sessions.Remove(summary.ConversationId, out var removed))
+        {
+            Detach(removed);
+            await removed.DisposeAsync();
+        }
+
+        _summaries = await Store.ListAsync();
 
         if (_session?.Conversation.ConversationId == summary.ConversationId)
         {
-            _session = _conversations.Count > 0 ? Sessions.Create(_conversations[0]) : null;
-            if (_session is null) NewConversation();
+            _session = null;
+
+            if (_summaries.Count > 0 && await Store.LoadAsync(_summaries[0].ConversationId) is Conversation next)
+            {
+                Open(next);
+            }
+            else
+            {
+                Open(new Conversation());
+            }
+        }
+    }
+
+    private void Open(Conversation conversation)
+    {
+        if (!_sessions.TryGetValue(conversation.ConversationId, out var session))
+        {
+            session = Sessions.Create(conversation);
+            conversation.MessageAdded += OnMessageAdded;
+            conversation.Changed += OnChanged;
+            _sessions[conversation.ConversationId] = session;
         }
 
-        Refresh();
+        _session = session;
     }
 
-    private void Refresh()
+    private void Detach(ChatSession session)
     {
-        _summaries = _conversations.Select(c => c.ToSummary()).ToArray();
-        InvokeAsync(StateHasChanged);
+        session.Conversation.MessageAdded -= OnMessageAdded;
+        session.Conversation.Changed -= OnChanged;
     }
+
+    private void OnMessageAdded(Conversation conversation, AiMessage message) =>
+        _ = InvokeAsync(async () =>
+        {
+            await Store.SaveAsync(conversation);
+            _summaries = await Store.ListAsync();
+            StateHasChanged();
+        });
+
+    private void OnChanged(Conversation conversation) =>
+        _ = InvokeAsync(async () =>
+        {
+            // Only threads that have been saved belong in the list.
+            if (conversation.Messages.Count == 0) return;
+            _summaries = await Store.ListAsync();
+            StateHasChanged();
+        });
+
+    public async ValueTask DisposeAsync()
+    {
+        foreach (var session in _sessions.Values)
+        {
+            Detach(session);
+            await session.DisposeAsync();
+        }
+
+        _sessions.Clear();
+    }
+
+    private const string Snippet = """
+        conversation.MessageAdded += async (c, _) =>
+            await store.SaveAsync(c);
+
+        var threads = await store.ListAsync();
+        """;
 }

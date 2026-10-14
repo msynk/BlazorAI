@@ -1,14 +1,30 @@
 @namespace Blazor.AI.Demo.Client.Layout
 @inherits LayoutComponentBase
+@implements IDisposable
 
-<div class="demo">
+<div class="demo @(_navOpen ? "demo--nav-open" : null)">
     <aside class="demo__nav">
-        <a class="demo__brand" href="">
-            <AiIcon Name="sparkle" />
-            <span>Blazor.AI</span>
-        </a>
+        <div class="demo__brand-row">
+            <a class="demo__brand" href="">
+                <AiIcon Name="sparkle" />
+                <span>Blazor.AI</span>
+            </a>
+            <button type="button"
+                    class="bai-btn bai-btn--icon demo__menu"
+                    aria-label="@(_navOpen ? "Close the menu" : "Open the menu")"
+                    aria-expanded="@(_navOpen ? "true" : "false")"
+                    aria-controls="demo-nav"
+                    @onclick="() => _navOpen = !_navOpen">
+                <AiIcon Name="@(_navOpen ? "close" : "layers")" />
+            </button>
+        </div>
 
-        <nav>
+        <nav id="demo-nav" class="demo__links" aria-label="Demos">
+            <NavLink class="demo__link" href="" Match="NavLinkMatch.All">
+                <span class="demo__index"><AiIcon Name="sparkle" /></span>
+                <span>Overview</span>
+            </NavLink>
+
             @foreach (var group in DemoIndex.Groups)
             {
                 <div class="demo__group">@group.Key</div>
@@ -20,6 +36,9 @@
                     </NavLink>
                 }
             }
+
+            <div class="demo__group">Appearance</div>
+            <ThemeSwitcher />
         </nav>
     </aside>
 
@@ -27,3 +46,21 @@
         @Body
     </main>
 </div>
+
+@code {
+    private bool _navOpen;
+
+    [Inject] private NavigationManager Navigation { get; set; } = default!;
+
+    protected override void OnInitialized() => Navigation.LocationChanged += OnLocationChanged;
+
+    // On a narrow screen the menu covers the page, so following a link closes it.
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        if (!_navOpen) return;
+        _navOpen = false;
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose() => Navigation.LocationChanged -= OnLocationChanged;
+}

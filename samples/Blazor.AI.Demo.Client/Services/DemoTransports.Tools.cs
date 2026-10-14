@@ -19,16 +19,13 @@ public static partial class DemoToolTransports
     public static IAiTransport CallsTool(string toolName, string arguments, string answer) =>
         new ScriptedTransport((request, token) => DemoTransports.Stream(token, async yielder =>
         {
-            var alreadyCalled = request.Messages
-                .SelectMany(m => m.Parts)
-                .OfType<ToolCallPart>()
-                .Any(c => c.Result is not null);
+            var alreadyCalled = Script.HasToolResultThisTurn(request);
 
             await yielder(new MessageStartedEvent());
 
             if (!alreadyCalled)
             {
-                await yielder(new StatusEvent($"Deciding what to look up"));
+                await yielder(new StatusEvent("Deciding what to look up"));
                 await Script.Pause(500, token);
 
                 var callId = AiId.NewToolCallId();
@@ -57,10 +54,7 @@ public static partial class DemoToolTransports
     public static IAiTransport CallsTwoTools() =>
         new ScriptedTransport((request, token) => DemoTransports.Stream(token, async yielder =>
         {
-            var alreadyCalled = request.Messages
-                .SelectMany(m => m.Parts)
-                .OfType<ToolCallPart>()
-                .Any(c => c.Result is not null);
+            var alreadyCalled = Script.HasToolResultThisTurn(request);
 
             await yielder(new MessageStartedEvent());
 

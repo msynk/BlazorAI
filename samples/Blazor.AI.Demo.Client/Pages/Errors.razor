@@ -1,4 +1,5 @@
 @page "/errors"
+@implements IAsyncDisposable
 
 <DemoPage Title="Errors and retry"
           Summary="The first attempt is rate limited. The failure is retryable, keeps the partial answer, and recovers on the second try.">
@@ -30,4 +31,6 @@
 
 @code {
     private readonly ChatSession _session = new(DemoInteractiveTransports.FailsThenRecovers());
+
+    public ValueTask DisposeAsync() => _session.DisposeAsync();
 }

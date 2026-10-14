@@ -1,4 +1,5 @@
 @page "/generative"
+@implements IAsyncDisposable
 
 <DemoPage Title="Generative UI"
           Summary="The model chooses a component from a registry and supplies its properties. Anything it names that is not registered renders nothing.">
@@ -33,4 +34,6 @@
             "Shows the current weather for one city.",
             required: "City"));
         """;
+
+    public ValueTask DisposeAsync() => _session.DisposeAsync();
 }

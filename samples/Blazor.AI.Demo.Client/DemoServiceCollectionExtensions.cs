@@ -25,11 +25,12 @@ public static class DemoServiceCollectionExtensions
             ai.UseTransport(DemoTransports.Echo());
             ai.AddModels(DemoCatalog.Models, DemoCatalog.Providers, "demo-model-1");
             ai.ConfigureSessions(options => options with { MaxToolRoundtrips = 6 });
+
+            // Scoped, so on the server each visitor gets their own threads rather than everyone's.
+            ai.UseConversationStore<InMemoryConversationStore>();
         });
 
         foreach (var tool in DemoCatalog.CreateTools()) services.AddAiTool(tool);
-
-        services.AddSingleton<IConversationStore, InMemoryConversationStore>();
 
         services.AddBlazorAIComponents(options => options with
         {

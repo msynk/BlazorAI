@@ -145,6 +145,45 @@ public static class DemoInteractiveTransports
             await yielder(new MessageCompletedEvent());
         }));
 
+    /// <summary>
+    /// Answers prompts written with slash commands and @-mentions, naming what was referenced.
+    /// </summary>
+    /// <returns>The transport.</returns>
+    /// <remarks>
+    /// A mention arrives as plain text, <c>@roadmap.md</c>. Resolving it to a file, a person, or a
+    /// data source is the application's job, which is why the composer hands over identifiers and
+    /// labels and not content.
+    /// </remarks>
+    public static IAiTransport Commands() =>
+        new ScriptedTransport((request, token) => DemoTransports.Stream(token, async yielder =>
+        {
+            await yielder(new MessageStartedEvent());
+
+            var text = Script.LastUserText(request);
+            var mentions = System.Text.RegularExpressions.Regex.Matches(text, @"(?<=^|\s)@([\w.\-]+)")
+                .Select(m => m.Groups[1].Value)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            var answer = text.StartsWith("Summarize", StringComparison.OrdinalIgnoreCase)
+                ? $"""
+                  So far:
+
+                  - {request.Messages.Count(m => m.Role.IsUser)} messages from you, {request.Messages.Count(m => m.Role.IsAssistant)} from me.
+                  - Nothing has been decided yet.
+                  - The next step is yours.
+                  """
+                : mentions.Length > 0
+                    ? "You referenced " + string.Join(", ", mentions.Select(m => $"**{m}**")) +
+                      ". A real application resolves each one by identifier and puts its content into the prompt; " +
+                      "the model never has to guess which file or person you meant."
+                    : "Type `/` for commands or `@` to reference a file, a person, or a data source.";
+
+            await foreach (var evt in Script.Write(answer, 4, 12, token)) await yielder(evt);
+            await yielder(Script.Usage(request, answer));
+            await yielder(new MessageCompletedEvent());
+        }));
+
     private static IEnumerable<string> Slice(string value, int size)
     {
         for (var i = 0; i < value.Length; i += size)

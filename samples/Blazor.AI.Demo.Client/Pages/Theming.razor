@@ -1,0 +1,97 @@
+@page "/theming"
+@implements IAsyncDisposable
+
+<DemoPage Title="Theming"
+          Summary="One region of the page with its own colour scheme, density, and accent, set through AiTheme and design tokens.">
+    <ChildContent>
+        <AiTheme Theme="_theme" Density="_density" Style="@Style">
+            <AiChat Session="_session"
+                    EmptyTitle="Restyle the conversation"
+                    Suggestions="@(new[] { "Show me what changed" })" />
+        </AiTheme>
+    </ChildContent>
+
+    <Aside>
+        <h3>Colour scheme</h3>
+        <div class="demo__segmented" role="radiogroup" aria-label="Colour scheme">
+            @foreach (var mode in Enum.GetValues<AiTheme.AiThemeMode>())
+            {
+                <button type="button" role="radio" aria-checked="@(_theme == mode ? "true" : "false")"
+                        class="demo__theme-option @(_theme == mode ? "demo__theme-option--active" : null)"
+                        @onclick="() => _theme = mode">@mode</button>
+            }
+        </div>
+
+        <h3>Density</h3>
+        <div class="demo__segmented" role="radiogroup" aria-label="Density">
+            @foreach (var density in Enum.GetValues<AiDensity>())
+            {
+                <button type="button" role="radio" aria-checked="@(_density == density ? "true" : "false")"
+                        class="demo__theme-option @(_density == density ? "demo__theme-option--active" : null)"
+                        @onclick="() => _density = density">@density</button>
+            }
+        </div>
+
+        <h3>Accent</h3>
+        <div class="demo__swatches" role="radiogroup" aria-label="Accent colour">
+            @foreach (var (name, value) in Accents)
+            {
+                <button type="button" role="radio" aria-checked="@(_accent == value ? "true" : "false")"
+                        aria-label="@name" title="@name"
+                        class="demo__swatch @(_accent == value ? "demo__swatch--active" : null)"
+                        style="background:@(value ?? "var(--bai-color-accent)")"
+                        @onclick="() => _accent = value"></button>
+            }
+        </div>
+
+        <h3>Corner radius</h3>
+        <input type="range" min="0" max="20" step="2" aria-label="Corner radius"
+               @bind="_radius" @bind:event="oninput" />
+        <span class="bai-chip">@(_radius)px</span>
+
+        <p>Everything above is a token on the wrapping element:</p>
+        <CodeBlockView Language="razor" Code="@Markup" />
+        <p class="demo__note">
+            The theme applies only inside <code>AiTheme</code>. The sidebar follows the switcher at the
+            bottom of the navigation instead, which sets the same attribute on the root element.
+        </p>
+    </Aside>
+</DemoPage>
+
+@code {
+    private static readonly (string Name, string? Value)[] Accents =
+    [
+        ("Default", null),
+        ("Teal", "#0f766e"),
+        ("Violet", "#7c3aed"),
+        ("Rose", "#e11d48"),
+        ("Amber", "#b45309"),
+    ];
+
+    private ChatSession? _session;
+    private AiTheme.AiThemeMode _theme = AiTheme.AiThemeMode.System;
+    private AiDensity _density = AiDensity.Comfortable;
+    private string? _accent;
+    private int _radius = 10;
+
+    [Inject] private ChatSessionFactory Sessions { get; set; } = default!;
+
+    protected override void OnInitialized() => _session = Sessions.Create(DemoConversations.Long(6));
+
+    private string Style =>
+        $"height:100%;--bai-radius:{_radius}px;" +
+        (_accent is { } accent
+            ? $"--bai-color-accent:{accent};--bai-color-accent-hover:{accent};" +
+              $"--bai-color-accent-subtle:color-mix(in srgb, {accent} 14%, transparent);"
+            : string.Empty);
+
+    private string Markup => $$"""
+        <AiTheme Theme="AiThemeMode.{{_theme}}"
+                 Density="AiDensity.{{_density}}"
+                 Style="{{Style.Replace("height:100%;", string.Empty)}}">
+            <AiChat />
+        </AiTheme>
+        """;
+
+    public ValueTask DisposeAsync() => _session?.DisposeAsync() ?? ValueTask.CompletedTask;
+}
