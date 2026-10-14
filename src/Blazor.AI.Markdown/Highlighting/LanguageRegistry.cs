@@ -24,6 +24,17 @@ public static class LanguageRegistry
     public static void Register(LanguageDefinition language)
     {
         ArgumentNullException.ThrowIfNull(language);
+
+        // Replacing a language replaces it under the aliases it was registered with too; otherwise
+        // ```cs would keep the old colours after csharp was replaced.
+        if (Languages.TryGetValue(language.Id, out var previous) && !ReferenceEquals(previous, language))
+        {
+            foreach (var (name, existing) in Languages)
+            {
+                if (ReferenceEquals(existing, previous)) Languages.TryUpdate(name, language, previous);
+            }
+        }
+
         Languages[language.Id] = language;
         foreach (var alias in language.Aliases) Languages[alias] = language;
     }
@@ -40,6 +51,11 @@ public static class LanguageRegistry
     public static bool IsSupported(string? name) => Find(name) is not null;
 
     /// <summary>The distinct registered languages.</summary>
+    /// <remarks>Each identifier yields the definition currently registered under it.</remarks>
     public static IReadOnlyCollection<LanguageDefinition> All =>
-        Languages.Values.DistinctBy(l => l.Id).OrderBy(l => l.Id, StringComparer.Ordinal).ToArray();
+        Languages
+            .Where(entry => string.Equals(entry.Key, entry.Value.Id, StringComparison.OrdinalIgnoreCase))
+            .Select(entry => entry.Value)
+            .OrderBy(l => l.Id, StringComparer.Ordinal)
+            .ToArray();
 }
