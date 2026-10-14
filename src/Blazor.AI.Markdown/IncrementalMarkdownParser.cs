@@ -29,6 +29,7 @@ public sealed class IncrementalMarkdownParser
     private bool _fenceOpen;
     private char _fenceChar;
     private int _fenceLength;
+    private bool _mathOpen;
 
     /// <summary>Creates a parser.</summary>
     /// <param name="options">Which extensions to enable.</param>
@@ -80,6 +81,7 @@ public sealed class IncrementalMarkdownParser
         _fenceOpen = false;
         _fenceChar = '\0';
         _fenceLength = 0;
+        _mathOpen = false;
     }
 
     private void ScanForBoundary()
@@ -99,13 +101,27 @@ public sealed class IncrementalMarkdownParser
             {
                 if (ClosesFence(line)) _fenceOpen = false;
             }
+            else if (_mathOpen)
+            {
+                // A display math block, like a fence, runs across blank lines until its closer.
+                if (line.Trim().EndsWith("$$", StringComparison.Ordinal)) _mathOpen = false;
+            }
             else if (TryOpenFence(line))
             {
                 _fenceOpen = true;
             }
-            else if (line.IsWhiteSpace() && IsSafeAfterBlank(source, next))
+            else if (_options.Math && OpensMath(line))
             {
-                _boundary = next;
+                _mathOpen = true;
+            }
+            else if (line.IsWhiteSpace())
+            {
+                // Undecided means the next line has not arrived yet. Stop here and look at this
+                // blank line again next time; moving past it would lose the boundary for good, and
+                // with text arriving a token at a time that would be almost every boundary.
+                var safe = IsSafeAfterBlank(source, next);
+                if (safe is null) break;
+                if (safe.Value) _boundary = next;
             }
 
             i = next;
@@ -126,6 +142,10 @@ public sealed class IncrementalMarkdownParser
         while (run < trimmed.Length && trimmed[run] == marker) run++;
         if (run < 3) return false;
 
+        // Matches MarkdownParser: a backtick fence's info string cannot contain a backtick, so
+        // "```inline```" is text, and treating it as a fence would pair every later fence wrongly.
+        if (marker == '`' && trimmed[run..].Contains('`')) return false;
+
         _fenceChar = marker;
         _fenceLength = run;
         return true;
@@ -144,21 +164,42 @@ public sealed class IncrementalMarkdownParser
         return true;
     }
 
-    private static bool IsSafeAfterBlank(string source, int position)
+    // Same rule as MarkdownParser: a line opening a display math block that does not also close it.
+    private static bool OpensMath(ReadOnlySpan<char> line)
+    {
+        var trimmed = line.Trim();
+        return trimmed.StartsWith("$$", StringComparison.Ordinal)
+            && !(trimmed.Length >= 4 && trimmed.EndsWith("$$", StringComparison.Ordinal));
+    }
+
+    /// <returns>
+    /// Whether the first non-blank line after a blank one starts a new block, or
+    /// <see langword="null"/> when too little of it has arrived to tell.
+    /// </returns>
+    private static bool? IsSafeAfterBlank(string source, int position)
     {
         for (var i = position; i < source.Length;)
         {
             var lineEnd = source.IndexOf('\n', i);
-            if (lineEnd < 0) return false;
+            var complete = lineEnd >= 0;
 
-            var line = source.AsSpan(i, lineEnd - i).TrimEnd('\r');
-            if (line.IsWhiteSpace()) { i = lineEnd + 1; continue; }
+            var line = source.AsSpan(i, (complete ? lineEnd : source.Length) - i).TrimEnd('\r');
+            if (line.IsWhiteSpace())
+            {
+                if (!complete) return null;
+                i = lineEnd + 1;
+                continue;
+            }
 
-            if (line[0] is ' ' or '\t') return false;
-            return !StartsListItem(line) && line[0] is not ('>' or '|');
+            if (line[0] is ' ' or '\t' or '>' or '|') return false;
+            if (StartsListItem(line)) return false;
+
+            // The first character usually settles it, but "1" or "-" may yet become a list marker.
+            if (!complete && (char.IsAsciiDigit(line[0]) || line[0] is '-' or '*' or '+')) return null;
+            return true;
         }
 
-        return false;
+        return null;
     }
 
     private static bool StartsListItem(ReadOnlySpan<char> line)

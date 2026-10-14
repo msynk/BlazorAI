@@ -37,9 +37,13 @@ public static class MarkdownParser
 
         var settings = options ?? MarkdownOptions.Default;
         var lines = SplitLines(markdown);
-        ParseBlocks(lines, 0, lines.Count, document.Blocks, settings, isComplete);
+        ParseBlocks(lines, 0, lines.Count, document.Blocks, settings, isComplete, 0);
         return document;
     }
+
+    // Quotes and lists recurse. A line of ten thousand '>' characters must not overflow the stack,
+    // which on Blazor Server takes the whole process down with it.
+    private const int MaxNesting = 32;
 
     internal static List<string> SplitLines(string text)
     {
@@ -64,7 +68,8 @@ public static class MarkdownParser
         int end,
         List<MarkdownBlock> output,
         MarkdownOptions options,
-        bool isComplete)
+        bool isComplete,
+        int depth)
     {
         var index = start;
 
@@ -82,8 +87,8 @@ public static class MarkdownParser
             if (TryThematicBreak(line, ref index, output)) continue;
             if (TryHeading(line, ref index, output, options)) continue;
             if (options.Math && TryMathBlock(lines, ref index, end, output, isComplete)) continue;
-            if (TryQuote(lines, ref index, end, output, options, isComplete)) continue;
-            if (TryList(lines, ref index, end, output, options, isComplete)) continue;
+            if (depth < MaxNesting && TryQuote(lines, ref index, end, output, options, isComplete, depth)) continue;
+            if (depth < MaxNesting && TryList(lines, ref index, end, output, options, isComplete, depth)) continue;
             if (options.Tables && TryTable(lines, ref index, end, output, options, isComplete)) continue;
             if (!options.AllowRawHtml || !TryHtmlBlock(lines, ref index, end, output)) ParseParagraph(lines, ref index, end, output, options, isComplete);
         }
@@ -114,20 +119,29 @@ public static class MarkdownParser
 
     private static bool TryThematicBreak(string line, ref int index, List<MarkdownBlock> output)
     {
+        if (!IsThematicBreak(line)) return false;
+
+        output.Add(new ThematicBreakBlock());
+        index++;
+        return true;
+    }
+
+    private static bool IsThematicBreak(string line)
+    {
         var trimmed = line.Trim();
         if (trimmed.Length < 3) return false;
 
         var marker = trimmed[0];
         if (marker is not ('-' or '*' or '_')) return false;
 
+        var count = 0;
         foreach (var c in trimmed)
         {
-            if (c != marker && c != ' ') return false;
+            if (c == marker) count++;
+            else if (c is not (' ' or '\t')) return false;
         }
 
-        output.Add(new ThematicBreakBlock());
-        index++;
-        return true;
+        return count >= 3;
     }
 
     private static bool TryHeading(string line, ref int index, List<MarkdownBlock> output, MarkdownOptions options)
@@ -140,13 +154,25 @@ public static class MarkdownParser
         if (level > 6) return false;
         if (level < trimmed.Length && trimmed[level] is not (' ' or '\t')) return false;
 
-        var text = trimmed[level..].Trim().TrimEnd('#').TrimEnd();
+        var text = StripClosingSequence(trimmed[level..].Trim());
         var heading = new HeadingBlock(level);
         heading.Inlines.AddRange(InlineParser.Parse(text, options, isComplete: true));
         if (options.HeadingIds) heading.Id = Slug(text);
         output.Add(heading);
         index++;
         return true;
+    }
+
+    // The closing run of '#' only counts when a space separates it from the text, or "## Using C#"
+    // would lose its last character.
+    private static string StripClosingSequence(string text)
+    {
+        var closing = text.Length;
+        while (closing > 0 && text[closing - 1] == '#') closing--;
+
+        if (closing == 0) return string.Empty;
+        if (closing == text.Length || text[closing - 1] is not (' ' or '\t')) return text;
+        return text[..closing].TrimEnd();
     }
 
     internal static string Slug(string text)
@@ -197,7 +223,7 @@ public static class MarkdownParser
 
         while (cursor < end)
         {
-            var candidate = lines[cursor].TrimStart();
+            var candidate = lines[cursor].Trim();
             if (candidate.Length >= fenceLength && candidate.All(c => c == fence))
             {
                 closed = true;
@@ -230,7 +256,7 @@ public static class MarkdownParser
         var body = new StringBuilder();
         var closed = false;
 
-        if (trimmed.Length > 2 && trimmed.EndsWith("$$", StringComparison.Ordinal))
+        if (trimmed.Length >= 4 && trimmed.EndsWith("$$", StringComparison.Ordinal))
         {
             body.Append(trimmed[2..^2]);
             closed = true;
@@ -238,13 +264,19 @@ public static class MarkdownParser
         }
         else
         {
+            body.Append(trimmed[2..]);
             var cursor = index + 1;
             while (cursor < end)
             {
                 var candidate = lines[cursor].Trim();
                 if (candidate.EndsWith("$$", StringComparison.Ordinal))
                 {
-                    if (candidate.Length > 2) body.Append(candidate[..^2]);
+                    if (candidate.Length > 2)
+                    {
+                        if (body.Length > 0) body.Append('\n');
+                        body.Append(candidate[..^2]);
+                    }
+
                     closed = true;
                     cursor++;
                     break;
@@ -268,26 +300,31 @@ public static class MarkdownParser
         int end,
         List<MarkdownBlock> output,
         MarkdownOptions options,
-        bool isComplete)
+        bool isComplete,
+        int depth)
     {
         if (!IsQuoteLine(lines[index])) return false;
 
         var inner = new List<string>();
         var cursor = index;
 
-        while (cursor < end && (IsQuoteLine(lines[cursor]) || (inner.Count > 0 && !IsBlank(lines[cursor]))))
+        while (cursor < end && (IsQuoteLine(lines[cursor]) || (inner.Count > 0 && IsLazyQuoteLine(lines, cursor, end, options))))
         {
             inner.Add(StripQuoteMarker(lines[cursor]));
             cursor++;
         }
 
         var quote = new QuoteBlock();
-        ParseBlocks(inner, 0, inner.Count, quote.Blocks, options, isComplete || cursor < end);
+        ParseBlocks(inner, 0, inner.Count, quote.Blocks, options, isComplete || cursor < end, depth + 1);
         quote.IsOpen = !isComplete && cursor >= end;
         output.Add(quote);
         index = cursor;
         return true;
     }
+
+    // Only paragraph text continues a quote lazily; a heading, fence, or list after it starts anew.
+    private static bool IsLazyQuoteLine(List<string> lines, int index, int end, MarkdownOptions options) =>
+        !IsBlank(lines[index]) && !StartsNewBlock(lines, index, end, options);
 
     private static bool IsQuoteLine(string line)
     {
@@ -332,7 +369,8 @@ public static class MarkdownParser
         int end,
         List<MarkdownBlock> output,
         MarkdownOptions options,
-        bool isComplete)
+        bool isComplete,
+        int depth)
     {
         if (TryReadListMarker(lines[index]) is not { } first) return false;
 
@@ -344,13 +382,15 @@ public static class MarkdownParser
         {
             if (IsBlank(lines[cursor]))
             {
-                if (cursor + 1 < end && TryReadListMarker(lines[cursor + 1]) is not null) sawBlank = true;
+                if (cursor + 1 < end && TryReadListMarker(lines[cursor + 1]) is { } next && next.IsOrdered == list.IsOrdered) sawBlank = true;
                 else if (cursor + 1 < end && IndentOf(lines[cursor + 1]) >= first.ContentIndent) sawBlank = true;
                 else break;
 
                 cursor++;
                 continue;
             }
+
+            if (IsThematicBreak(lines[cursor])) break;
 
             if (TryReadListMarker(lines[cursor]) is not { } marker)
             {
@@ -376,7 +416,8 @@ public static class MarkdownParser
                 cursor++;
             }
 
-            list.Items.Add(BuildItem(lines, itemStart, cursor, marker, options, isComplete));
+            // Only the item the source ends inside can still grow.
+            list.Items.Add(BuildItem(lines, itemStart, cursor, marker, options, isComplete || cursor < end, depth));
         }
 
         list.IsLoose = sawBlank;
@@ -387,7 +428,8 @@ public static class MarkdownParser
     }
 
     private static bool IsLazyContinuation(string line) =>
-        !IsBlank(line) && TryReadListMarker(line) is null && line.TrimStart()[0] is not ('#' or '>' or '`' or '~');
+        !IsBlank(line) && TryReadListMarker(line) is null && !IsThematicBreak(line)
+        && line.TrimStart()[0] is not ('#' or '>' or '`' or '~');
 
     private static ListItemBlock BuildItem(
         List<string> lines,
@@ -395,7 +437,8 @@ public static class MarkdownParser
         int end,
         ListMarker marker,
         MarkdownOptions options,
-        bool isComplete)
+        bool isComplete,
+        int depth)
     {
         var item = new ListItemBlock();
         var body = new List<string>(end - start);
@@ -406,7 +449,7 @@ public static class MarkdownParser
             if (i == start)
             {
                 var trimmed = line.TrimStart();
-                var offset = trimmed.IndexOf(' ');
+                var offset = trimmed.IndexOfAny([' ', '\t']);
                 line = offset < 0 ? string.Empty : trimmed[(offset + 1)..];
 
                 if (options.TaskLists && line.Length >= 3 && line[0] == '[' && line[2] == ']')
@@ -421,15 +464,37 @@ public static class MarkdownParser
             }
             else
             {
-                var strip = Math.Min(marker.ContentIndent, IndentOf(line));
-                line = strip > 0 && line.Length >= strip ? line[strip..] : line.TrimStart();
+                line = StripIndent(line, marker.ContentIndent);
             }
 
             body.Add(line);
         }
 
-        ParseBlocks(body, 0, body.Count, item.Blocks, options, isComplete);
+        ParseBlocks(body, 0, body.Count, item.Blocks, options, isComplete, depth + 1);
         return item;
+    }
+
+    // Removes up to the given number of columns of indentation, counting a tab as IndentOf does, so
+    // a tab is never cut in half and the characters after it are never eaten.
+    private static string StripIndent(string line, int columns)
+    {
+        var column = 0;
+        var i = 0;
+
+        while (i < line.Length && column < columns)
+        {
+            if (line[i] == ' ') column++;
+            else if (line[i] == '\t')
+            {
+                if (column + 4 > columns) return new string(' ', column + 4 - columns) + line[(i + 1)..];
+                column += 4;
+            }
+            else break;
+
+            i++;
+        }
+
+        return line[i..];
     }
 
     private static bool TryTable(
@@ -609,8 +674,19 @@ public static class MarkdownParser
         if (trimmed.StartsWith("```", StringComparison.Ordinal) || trimmed.StartsWith("~~~", StringComparison.Ordinal)) return true;
         if (trimmed.StartsWith('>')) return true;
         if (TryReadListMarker(line) is not null) return true;
+        if (IsThematicBreak(line)) return true;
+        if (options.Math && IsDisplayMathLine(trimmed)) return true;
         if (options.Tables && index + 1 < end && line.Contains('|') && ParseAlignments(lines[index + 1]) is not null) return true;
         return false;
+    }
+
+    // A line that is only "$$", or a whole "$$...$$" expression, is display math even straight after
+    // text. Anything looser would turn a paragraph line that merely starts with "$$" into a math block.
+    private static bool IsDisplayMathLine(string trimmed)
+    {
+        var line = trimmed.TrimEnd();
+        return line == "$$"
+            || (line.Length >= 4 && line.StartsWith("$$", StringComparison.Ordinal) && line.EndsWith("$$", StringComparison.Ordinal));
     }
 
     private static int TryHeadingLevel(string trimmed)

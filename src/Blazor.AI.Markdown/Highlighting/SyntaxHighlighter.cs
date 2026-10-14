@@ -82,7 +82,10 @@ public static class SyntaxHighlighter
                 continue;
             }
 
-            if (language.AnnotationPrefix == c && i + 1 < code.Length && IsWordStart(code[i + 1]))
+            // A bracket only introduces an attribute at the start of a line; elsewhere, as in
+            // items[index], it is an indexer.
+            if (language.AnnotationPrefix == c && i + 1 < code.Length && IsWordStart(code[i + 1])
+                && (c != '[' || IsLineStart(code, i)))
             {
                 var end = i + 1;
                 while (end < code.Length && IsWordChar(code[end])) end++;
@@ -151,6 +154,17 @@ public static class SyntaxHighlighter
         return false;
     }
 
+    private static bool IsLineStart(string code, int index)
+    {
+        for (var i = index - 1; i >= 0; i--)
+        {
+            if (code[i] == '\n') return true;
+            if (code[i] is not (' ' or '\t' or '\r')) return false;
+        }
+
+        return true;
+    }
+
     private static char NextNonSpace(string code, int index)
     {
         for (var i = index; i < code.Length; i++)
@@ -197,6 +211,22 @@ public static class SyntaxHighlighter
     private static int ScanString(string code, int start, LanguageDefinition language)
     {
         var quote = code[start];
+
+        // A tripled delimiter opens a string that runs to the matching triple across lines: Python
+        // docstrings, C# raw strings, and Java or Kotlin text blocks. Read as three ordinary
+        // strings, the apostrophe in """It's""" would open a stray literal.
+        if (start + 2 < code.Length && code[start + 1] == quote && code[start + 2] == quote)
+        {
+            var triple = new string(quote, 3);
+            for (var j = start + 3; j < code.Length; j++)
+            {
+                if (language.StringEscapes && code[j] == '\\') { j++; continue; }
+                if (MatchesAt(code, j, triple)) return j + 3;
+            }
+
+            return code.Length;
+        }
+
         var i = start + 1;
 
         while (i < code.Length)
