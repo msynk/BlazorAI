@@ -39,8 +39,19 @@ public static class DemoServiceCollectionExtensions
             ShowTimestamps = false,
         });
 
-        // A custom renderer for one tool, which replaces the default card wherever that tool appears.
-        services.ConfigureAiRenderers(renderers => renderers.RegisterTool<SearchResultCard>("search_docs"));
+        // Custom renderers, which replace the default view wherever that tool or schema appears.
+        services.ConfigureAiRenderers(renderers =>
+        {
+            renderers.RegisterTool<SearchResultCard>("search_docs");
+
+            // A schema the model fills in becomes a form the user checks, instead of raw JSON.
+            renderers.RegisterStructured("booking_form", context => builder =>
+            {
+                builder.OpenComponent<BookingForm>(0);
+                builder.AddComponentParameter(1, nameof(BookingForm.Part), context.Part);
+                builder.CloseComponent();
+            });
+        });
 
         // The components model output is allowed to instantiate, and the properties it may set.
         services.ConfigureGenerativeUi(registry => registry.Register<ForecastCard>(

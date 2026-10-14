@@ -349,7 +349,6 @@ body {
 
 .demo__aside h3 {
   margin: var(--bai-space-4) 0 var(--bai-space-2);
-  font-size: var(--bai-font-size-sm);
 }
 
 .demo__aside h3:first-child {

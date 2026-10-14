@@ -4,20 +4,11 @@
 <DemoPage Title="AI forms"
           Summary="The model proposes a form from a JSON Schema, the user corrects it, and the corrected values are what execute.">
     <ChildContent>
-        <AiChat Session="_session"
-                EmptyTitle="Ask it to book something"
-                Suggestions="@(new[] { "Book a table for Friday" })">
-            <MessageTemplate>
-                <ChatMessage Message="context" Session="_session">
-                    @if (FormPart(context) is { } part)
-                    {
-                        <AiForm Definition="Definition(part)"
-                                Submitted="@_submitted"
-                                OnSubmit="OnSubmitAsync" />
-                    }
-                </ChatMessage>
-            </MessageTemplate>
-        </AiChat>
+        <CascadingValue Name="BookingSubmitted" Value="_onSubmitted" IsFixed="true">
+            <AiChat Session="_session"
+                    EmptyTitle="Ask it to book something"
+                    Suggestions="@(new[] { "Book a table for Friday" })" />
+        </CascadingValue>
     </ChildContent>
 
     <Aside>
@@ -26,6 +17,11 @@
             The model produced a schema, not a booking. The form is built from that schema, validated
             in the application rather than by the model, and only submits when it is valid.
         </p>
+        <p>
+            A structured renderer registered for the <code>booking_form</code> schema replaces the
+            default view, so the user sees a form rather than the JSON behind it.
+        </p>
+        <CodeBlockView Language="csharp" Code="@Snippet" />
         @if (_values is { } values)
         {
             <h3>Submitted values</h3>
@@ -46,20 +42,19 @@
 @code {
     private readonly ChatSession _session = new(DemoInteractiveTransports.ProposesForm());
     private IReadOnlyDictionary<string, string?>? _values;
-    private bool _submitted;
+    private EventCallback<IReadOnlyDictionary<string, string?>> _onSubmitted;
 
-    private static StructuredDataPart? FormPart(AiMessage message) =>
-        message.PartsOf<StructuredDataPart>().FirstOrDefault(p => p.SchemaName == "booking_form");
+    protected override void OnInitialized() =>
+        _onSubmitted = EventCallback.Factory.Create<IReadOnlyDictionary<string, string?>>(this, values => _values = values);
 
-    private static AiFormDefinition Definition(StructuredDataPart part) =>
-        part.Value is { } schema ? AiFormDefinition.FromJsonSchema(schema) : new AiFormDefinition();
-
-    private Task OnSubmitAsync(IReadOnlyDictionary<string, string?> values)
-    {
-        _values = values;
-        _submitted = true;
-        return Task.CompletedTask;
-    }
+    private const string Snippet = """
+        renderers.RegisterStructured("booking_form", context => builder =>
+        {
+            builder.OpenComponent<BookingForm>(0);
+            builder.AddComponentParameter(1, "Part", context.Part);
+            builder.CloseComponent();
+        });
+        """;
 
     public ValueTask DisposeAsync() => _session.DisposeAsync();
 }
