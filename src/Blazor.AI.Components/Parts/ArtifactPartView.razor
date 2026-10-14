@@ -1,0 +1,38 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+
+@*
+    Where a message introduced an artifact.
+
+    The artifact belongs to the conversation rather than to the message, so this resolves it by
+    identifier and shows the shared panel, opened at the version this turn produced. A later
+    revision therefore does not rewrite what an earlier turn appears to have said.
+*@
+
+@if (_artifact is not null)
+{
+    <ArtifactView Artifact="_artifact" InitialVersion="Part.ArtifactVersion" />
+}
+else
+{
+    <div class="bai-chip" title="@Part.ArtifactId">
+        <AiIcon Name="layers" />
+        <span>@Strings.Artifact</span>
+    </div>
+}
+
+@code {
+    private Artifact? _artifact;
+
+    /// <summary>The part that references the artifact.</summary>
+    [Parameter, EditorRequired]
+    public ArtifactPart Part { get; set; } = default!;
+
+    /// <summary>The conversation that holds the artifact.</summary>
+    [Parameter]
+    public Conversation? Conversation { get; set; }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet() =>
+        _artifact = Conversation?.FindArtifact(Part.ArtifactId);
+}

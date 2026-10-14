@@ -6,7 +6,8 @@
    component instance to restyle the framework without touching its source.
    ========================================================================= */
 
-.bai,
+/* Tokens are defined on :root only. Declaring them on .bai as well would reset them on every chat
+   root, which both discards the system dark palette and hides any override set on :root. */
 :root {
   /* Palette: neutrals carry the interface, one accent carries intent. */
   --bai-color-bg: #ffffff;
@@ -108,8 +109,58 @@
   --bai-syntax-meta: #8a8f9c;
 }
 
+/* An explicit light region, which must stay light inside a page that is dark by system preference. */
+.bai-theme-light,
+[data-bai-theme="light"] {
+  color-scheme: light;
+  --bai-color-bg: #ffffff;
+  --bai-color-bg-subtle: #f7f7f8;
+  --bai-color-bg-muted: #f0f0f2;
+  --bai-color-bg-inset: #fafafa;
+  --bai-color-bg-overlay: rgba(255, 255, 255, 0.86);
+  --bai-color-fg: #14151a;
+  --bai-color-fg-muted: #5d616e;
+  --bai-color-fg-subtle: #8a8f9c;
+  --bai-color-fg-inverted: #ffffff;
+  --bai-color-border: #e4e4e8;
+  --bai-color-border-strong: #cfd0d6;
+  --bai-color-focus: #2f6feb;
+  --bai-color-accent: #2f6feb;
+  --bai-color-accent-hover: #2a61cf;
+  --bai-color-accent-subtle: #eef3fe;
+  --bai-color-accent-fg: #ffffff;
+  --bai-color-success: #167f4a;
+  --bai-color-success-subtle: #e8f6ee;
+  --bai-color-warning: #9a6200;
+  --bai-color-warning-subtle: #fdf3e2;
+  --bai-color-danger: #c02626;
+  --bai-color-danger-subtle: #fdeded;
+  --bai-color-info: #2f6feb;
+  --bai-color-info-subtle: #eef3fe;
+  --bai-user-bg: #f0f0f2;
+  --bai-shadow-sm: 0 1px 2px rgba(16, 18, 24, 0.06);
+  --bai-shadow: 0 2px 8px rgba(16, 18, 24, 0.08);
+  --bai-shadow-lg: 0 12px 32px rgba(16, 18, 24, 0.14);
+  --bai-syntax-keyword: #a626a4;
+  --bai-syntax-type: #0184bc;
+  --bai-syntax-string: #50a14f;
+  --bai-syntax-number: #b76b01;
+  --bai-syntax-comment: #8a8f9c;
+  --bai-syntax-function: #4078f2;
+  --bai-syntax-operator: #5d616e;
+  --bai-syntax-punctuation: #7a7f8c;
+  --bai-syntax-property: #c18401;
+  --bai-syntax-tag: #e45649;
+  --bai-syntax-attribute: #b76b01;
+  --bai-syntax-constant: #986801;
+  --bai-syntax-inserted: #167f4a;
+  --bai-syntax-deleted: #c02626;
+  --bai-syntax-meta: #8a8f9c;
+}
+
 .bai-theme-dark,
 [data-bai-theme="dark"] {
+  color-scheme: dark;
   --bai-color-bg: #17181c;
   --bai-color-bg-subtle: #1d1f24;
   --bai-color-bg-muted: #24262c;
@@ -241,6 +292,12 @@
   outline: 2px solid var(--bai-color-focus);
   outline-offset: 2px;
   border-radius: var(--bai-radius-sm);
+}
+
+/* The attach button is a label around a visually hidden file input; show the ring on the label. */
+.bai-btn:has(> input:focus-visible) {
+  outline: 2px solid var(--bai-color-focus);
+  outline-offset: 2px;
 }
 
 .bai-sr-only {

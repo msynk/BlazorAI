@@ -33,7 +33,22 @@
         {
             @foreach (var message in Rendered())
             {
-                @RenderMessage(message, !_prerendering)
+                @* Keyed here, as a direct sibling, rather than inside RenderMessage: a key inside a
+                   per-item fragment only competes with itself, so removing one message would
+                   recreate every message after it. *@
+                @if (MessageTemplate is not null)
+                {
+                    @MessageTemplate(message)
+                }
+                else
+                {
+                    <ChatMessage Message="message"
+                                 Conversation="Conversation"
+                                 Session="Session"
+                                 Animate="@(!_prerendering && _initialised)"
+                                 OnCitationClick="OnCitationClick"
+                                 @key="message.MessageId" />
+                }
             }
         }
 
@@ -53,6 +68,7 @@
     private bool _prerendering;
     private bool _pinned = true;
     private bool _initialised;
+    private bool _observing;
     private int _renderedCount;
 
     /// <summary>The conversation to render.</summary>
@@ -128,9 +144,17 @@
         if (firstRender)
         {
             _self = DotNetObjectReference.Create(this);
+            _observing = true;
             await Interop.InvokeVoidAsync("observeScroll", _scroll, _self);
-            await Interop.InvokeVoidAsync("scrollToBottom", _scroll, false);
+        }
+
+        if (!_initialised)
+        {
+            // The first render, or the first after switching conversations: start at the newest
+            // message without animating, then follow from here.
             _initialised = true;
+            _renderedCount = _messages.Count;
+            await Interop.InvokeVoidAsync("scrollToBottom", _scroll, false);
             return;
         }
 
@@ -167,20 +191,25 @@
         UpdateVirtualization();
     }
 
-    private void OnMessageAdded(Conversation conversation, AiMessage message)
+    // The session raises these from whatever thread the stream is on. The list is enumerated during
+    // rendering, so it is only ever mutated on the renderer's dispatcher.
+    private void OnMessageAdded(Conversation conversation, AiMessage message) => _ = InvokeAsync(() =>
     {
+        if (!ReferenceEquals(conversation, _subscribed)) return;
         if (HideSystemMessages && message.Role.IsSystem) return;
+        if (_messages.Contains(message)) return;
         _messages.Add(message);
         UpdateVirtualization();
         RequestRender();
-    }
+    });
 
-    private void OnMessageRemoved(Conversation conversation, AiMessage message)
+    private void OnMessageRemoved(Conversation conversation, AiMessage message) => _ = InvokeAsync(() =>
     {
-        _messages.Remove(message);
+        if (!ReferenceEquals(conversation, _subscribed)) return;
+        if (!_messages.Remove(message)) return;
         UpdateVirtualization();
         RequestRender();
-    }
+    });
 
     private void OnMessageUpdated(Conversation conversation, AiMessage message)
     {
@@ -236,5 +265,12 @@
         Detach();
         _self?.Dispose();
         _self = null;
+    }
+
+    /// <inheritdoc />
+    protected override async ValueTask DisposeCoreAsync()
+    {
+        if (_observing) await Interop.InvokeVoidAsync("stopObservingScroll", _scroll);
+        _observing = false;
     }
 }

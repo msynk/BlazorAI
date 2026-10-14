@@ -6,7 +6,7 @@
     middle-click and context-menu affordances; a button otherwise.
 *@
 
-@if (Source.Url is { Length: > 0 } url && !OnActivate.HasDelegate)
+@if (SafeUrl(Source.Url) is { } url && !OnActivate.HasDelegate)
 {
     <a class="bai-source" href="@url" target="_blank" rel="noopener noreferrer">
         @Body()
@@ -49,6 +49,20 @@ else
             </span>
         </span>
     };
+
+    /// <summary>
+    /// Returns the URL only when it is an absolute web address.
+    /// </summary>
+    /// <remarks>
+    /// Source URLs come from the model or from retrieved content, and Blazor writes an href as
+    /// given, so a javascript: URL would run in the host page when clicked. Anything that is not
+    /// http or https renders as a plain card instead of a link.
+    /// </remarks>
+    internal static string? SafeUrl(string? url) =>
+        Uri.TryCreate(url?.Trim(), UriKind.Absolute, out var uri)
+        && (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp)
+            ? url!.Trim()
+            : null;
 
     private static string? HostOf(string? url) =>
         Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.Host : null;

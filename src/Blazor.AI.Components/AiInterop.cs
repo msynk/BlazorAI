@@ -43,12 +43,27 @@ public sealed class AiInterop : IAsyncDisposable, IDisposable
         if (_module is not null) return _module;
         if (_unavailable) return null;
 
-        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await _gate.WaitAsync().ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            // The scope is being torn down; there is nothing left to call into.
+            return null;
+        }
+
         try
         {
             if (_module is not null) return _module;
             _module = await _js.InvokeAsync<IJSObjectReference>("import", ModulePath).ConfigureAwait(false);
             return _module;
+        }
+        catch (JSDisconnectedException)
+        {
+            // The circuit is gone, which is not an exception but the end of the session. It is not a
+            // JSException, so it needs its own clause or it escapes every caller.
+            return null;
         }
         catch (JSException)
         {

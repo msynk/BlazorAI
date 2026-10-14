@@ -1,0 +1,452 @@
+@namespace Blazor.AI.Components
+@inherits AiComponentBase
+@inject AiRendererRegistry Renderers
+@inject AiInterop Interop
+
+@*
+    The panel an artifact lives in: a title, a version selector once there is more than one version,
+    copy, download, and a full-screen toggle, around a body chosen by the artifact kind.
+
+    Copy and download act on the version being viewed rather than always the latest, because the
+    version on screen is the one the user means. HTML is previewed in a frame that may run scripts
+    but is denied same-origin access, which is the only way to show generated markup without handing
+    it the host page.
+*@
+
+@if (_expanded)
+{
+    <div class="bai-backdrop" aria-hidden="true" @onclick="ToggleExpanded"></div>
+}
+
+<section class="bai-artifact @(_expanded ? "bai-artifact--expanded" : null) @Class"
+         aria-label="@Artifact.Title"
+         data-artifact-id="@Artifact.ArtifactId"
+         @onkeydown="OnKeyDown">
+    <div class="bai-artifact__header">
+        <AiIcon Name="@IconName" />
+        <span class="bai-artifact__title" title="@Artifact.Title">@Artifact.Title</span>
+
+        @if (IsStreaming)
+        {
+            <span class="bai-thinking__dots" aria-hidden="true">
+                <span class="bai-thinking__dot"></span>
+                <span class="bai-thinking__dot"></span>
+                <span class="bai-thinking__dot"></span>
+            </span>
+        }
+
+        @if (AvailableVersions() is { Count: > 1 } versions)
+        {
+            <select class="bai-select"
+                    style="width:auto"
+                    aria-label="@Strings.Version"
+                    value="@ViewedVersion"
+                    @onchange="OnVersionChanged">
+                @foreach (var version in versions)
+                {
+                    <option value="@version">@($"{Strings.Version} {version}")</option>
+                }
+            </select>
+        }
+
+        <CopyButton Content="@ViewedContent" />
+
+        <button type="button"
+                class="bai-btn bai-btn--icon"
+                title="@Strings.Download"
+                aria-label="@Strings.Download"
+                disabled="@(ViewedContent is null)"
+                @onclick="DownloadAsync">
+            <AiIcon Name="download" />
+        </button>
+
+        <button type="button"
+                class="bai-btn bai-btn--icon"
+                title="@(_expanded ? Strings.Collapse : Strings.Expand)"
+                aria-label="@(_expanded ? Strings.Collapse : Strings.Expand)"
+                aria-pressed="@(_expanded ? "true" : "false")"
+                @onclick="ToggleExpanded">
+            <AiIcon Name="@(_expanded ? "collapse" : "expand")" />
+        </button>
+    </div>
+
+    <div class="bai-artifact__body">
+        @if (Renderers.FindArtifact(Artifact.Kind) is { } renderer)
+        {
+            <RendererBoundary Label="@($"The renderer for '{Artifact.Kind}' failed")">
+                @renderer(new ArtifactContext(Artifact, _expanded))
+            </RendererBoundary>
+        }
+        else
+        {
+            @RenderBuiltIn()
+        }
+    </div>
+</section>
+
+@code {
+    private Artifact? _subscribed;
+    private int? _selectedVersion;
+    private bool _expanded;
+
+    /// <summary>The artifact to show.</summary>
+    [Parameter, EditorRequired]
+    public Artifact Artifact { get; set; } = default!;
+
+    /// <summary>
+    /// The version to show until the user picks another, for example the one a particular turn
+    /// produced. The latest version is shown when unset or when the version does not exist.
+    /// </summary>
+    [Parameter]
+    public int? InitialVersion { get; set; }
+
+    /// <summary>Extra CSS classes.</summary>
+    [Parameter]
+    public string? Class { get; set; }
+
+    /// <summary>The version on screen.</summary>
+    private int ViewedVersion
+    {
+        get
+        {
+            var wanted = _selectedVersion ?? InitialVersion;
+            return wanted is { } version && version != Artifact.Version && Snapshot(version) is not null
+                ? version
+                : Artifact.Version;
+        }
+    }
+
+    private bool IsLive => ViewedVersion == Artifact.Version;
+
+    private bool IsStreaming => IsLive && Artifact.IsStreaming;
+
+    private string? ViewedContent => IsLive ? Artifact.Content : Snapshot(ViewedVersion)?.Content;
+
+    private string IconName => Artifact.Kind.Value.ToLowerInvariant() switch
+    {
+        "code" or "html" or "json" => "code",
+        "image" or "svg" or "chart" or "diagram" => "image",
+        "document" => "file",
+        _ => "layers",
+    };
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        if (!ReferenceEquals(_subscribed, Artifact))
+        {
+            if (_subscribed is not null) _subscribed.Changed -= OnArtifactChanged;
+            _subscribed = Artifact;
+            _subscribed.Changed += OnArtifactChanged;
+            _selectedVersion = null;
+        }
+    }
+
+    private void OnArtifactChanged(Artifact artifact) => RequestRender();
+
+    /// <summary>Every version that can be shown: the committed ones plus the current draft.</summary>
+    private List<int> AvailableVersions()
+    {
+        var versions = new List<int>(Artifact.Versions.Count + 1);
+        foreach (var snapshot in Artifact.Versions)
+        {
+            if (!versions.Contains(snapshot.Version)) versions.Add(snapshot.Version);
+        }
+
+        if (!versions.Contains(Artifact.Version)) versions.Add(Artifact.Version);
+        versions.Sort();
+        return versions;
+    }
+
+    private ArtifactVersion? Snapshot(int version)
+    {
+        var versions = Artifact.Versions;
+        for (var i = versions.Count - 1; i >= 0; i--)
+        {
+            if (versions[i].Version == version) return versions[i];
+        }
+
+        return null;
+    }
+
+    private void OnVersionChanged(ChangeEventArgs args)
+    {
+        if (int.TryParse(args.Value?.ToString(), System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var version))
+        {
+            _selectedVersion = version;
+        }
+    }
+
+    private void ToggleExpanded() => _expanded = !_expanded;
+
+    private void OnKeyDown(KeyboardEventArgs args)
+    {
+        if (_expanded && args.Key is "Escape") _expanded = false;
+    }
+
+    private async Task DownloadAsync()
+    {
+        if (ViewedContent is not { } content) return;
+        var (fileName, mimeType) = DownloadInfo(Artifact, content, IsLive ? null : ViewedVersion);
+        await Interop.DownloadTextAsync(fileName, content, mimeType);
+    }
+
+    private RenderFragment RenderBuiltIn() => __builder =>
+    {
+        var content = ViewedContent;
+        var kind = Artifact.Kind;
+
+        if (kind == ArtifactKind.Image)
+        {
+            if ((Artifact.Url ?? content) is { Length: > 0 } source)
+            {
+                <img src="@source" alt="@Artifact.Title" style="display:block;max-width:100%;height:auto;margin:0 auto" />
+            }
+
+            return;
+        }
+
+        if (kind == ArtifactKind.Svg && !IsStreaming && (content is { Length: > 0 } || Artifact.Url is { Length: > 0 }))
+        {
+            // An image element never runs script inside the SVG, which inline markup would.
+            var source = content is { Length: > 0 } markup
+                ? $"data:image/svg+xml;base64,{Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(markup))}"
+                : Artifact.Url;
+            <img src="@source" alt="@Artifact.Title" style="display:block;max-width:100%;height:auto;margin:0 auto" />
+            return;
+        }
+
+        if (content is null) return;
+
+        if (kind == ArtifactKind.Document)
+        {
+            <div style="padding:var(--bai-space-3) var(--bai-space-4)">
+                <StreamingMarkdown Text="@content" IsStreaming="@IsStreaming" />
+            </div>
+        }
+        else if (kind == ArtifactKind.Html && !IsStreaming)
+        {
+            <iframe class="bai-artifact__frame"
+                    sandbox="allow-scripts allow-forms allow-popups"
+                    srcdoc="@content"
+                    title="@Artifact.Title"></iframe>
+        }
+        else if (kind == ArtifactKind.Json && PartialJson.TryParse(content) is { } json)
+        {
+            <div style="padding:var(--bai-space-3)">
+                <JsonView Value="json" />
+            </div>
+        }
+        else if (kind == ArtifactKind.Table && LooksLikeJson(content) && PartialJson.TryParse(content) is { } rows)
+        {
+            if (rows.ValueKind is JsonValueKind.Array)
+            {
+                <DataTable Rows="rows" />
+            }
+            else
+            {
+                <div style="padding:var(--bai-space-3)">
+                    <JsonView Value="rows" />
+                </div>
+            }
+        }
+        else if (kind == ArtifactKind.Table)
+        {
+            @RenderCsv(ParseDelimited(content, IsTabSeparated(Artifact.Language) ? '\t' : ','))
+        }
+        else
+        {
+            <CodeBlockView Code="@content"
+                           Language="@(Artifact.Language ?? DefaultLanguage(kind))"
+                           IsStreaming="@IsStreaming"
+                           ShowHeader="false" />
+        }
+    };
+
+    private static RenderFragment RenderCsv(List<List<string>> rows) => __builder =>
+    {
+        if (rows.Count == 0) return;
+
+        var header = rows[0];
+        <div class="bai-table-wrap">
+            <table class="bai-prose">
+                <thead>
+                    <tr>
+                        @foreach (var cell in header)
+                        {
+                            <th>@cell</th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @for (var i = 1; i < rows.Count; i++)
+                    {
+                        <tr>
+                            @foreach (var cell in rows[i])
+                            {
+                                <td>@cell</td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    };
+
+    private static bool LooksLikeJson(string content)
+    {
+        var trimmed = content.AsSpan().TrimStart();
+        return trimmed.Length > 0 && trimmed[0] is '[' or '{';
+    }
+
+    private static bool IsTabSeparated(string? language) =>
+        string.Equals(language, "tsv", StringComparison.OrdinalIgnoreCase);
+
+    private static string? DefaultLanguage(ArtifactKind kind) =>
+        kind == ArtifactKind.Html ? "html"
+        : kind == ArtifactKind.Json ? "json"
+        : kind == ArtifactKind.Svg ? "xml"
+        : null;
+
+    /// <summary>Splits delimited text into rows of fields, honouring double-quoted fields.</summary>
+    /// <param name="text">The text to split.</param>
+    /// <param name="delimiter">The field separator.</param>
+    /// <returns>The rows.</returns>
+    internal static List<List<string>> ParseDelimited(string text, char delimiter = ',')
+    {
+        var rows = new List<List<string>>();
+        var row = new List<string>();
+        var field = new System.Text.StringBuilder();
+        var quoted = false;
+        var fieldStarted = false;
+
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (quoted)
+            {
+                if (c != '"')
+                {
+                    field.Append(c);
+                }
+                else if (i + 1 < text.Length && text[i + 1] == '"')
+                {
+                    field.Append('"');
+                    i++;
+                }
+                else
+                {
+                    quoted = false;
+                }
+
+                continue;
+            }
+
+            if (c == '"' && !fieldStarted)
+            {
+                quoted = true;
+                fieldStarted = true;
+            }
+            else if (c == delimiter)
+            {
+                row.Add(field.ToString());
+                field.Clear();
+                fieldStarted = false;
+            }
+            else if (c == '\n')
+            {
+                row.Add(field.ToString());
+                field.Clear();
+                fieldStarted = false;
+                rows.Add(row);
+                row = [];
+            }
+            else if (c != '\r')
+            {
+                field.Append(c);
+                fieldStarted = true;
+            }
+        }
+
+        if (fieldStarted || row.Count > 0)
+        {
+            row.Add(field.ToString());
+            rows.Add(row);
+        }
+
+        return rows;
+    }
+
+    /// <summary>Chooses a file name and MIME type for downloading an artifact.</summary>
+    /// <param name="artifact">The artifact.</param>
+    /// <param name="content">The content being downloaded.</param>
+    /// <param name="version">The version, when it is not the latest.</param>
+    /// <returns>The file name and MIME type.</returns>
+    internal static (string FileName, string MimeType) DownloadInfo(Artifact artifact, string content, int? version = null)
+    {
+        var kind = artifact.Kind;
+        var (extension, mimeType) =
+            kind == ArtifactKind.Document ? ("md", "text/markdown")
+            : kind == ArtifactKind.Html ? ("html", "text/html")
+            : kind == ArtifactKind.Json ? ("json", "application/json")
+            : kind == ArtifactKind.Svg ? ("svg", "image/svg+xml")
+            : kind == ArtifactKind.Table ? (LooksLikeJson(content) ? ("json", "application/json")
+                : IsTabSeparated(artifact.Language) ? ("tsv", "text/tab-separated-values") : ("csv", "text/csv"))
+            : (ExtensionFor(artifact.Language), "text/plain");
+
+        var name = Slug(artifact.Title);
+        if (version is { } v) name += $"-v{v}";
+        return ($"{name}.{extension}", mimeType);
+    }
+
+    private static string ExtensionFor(string? language) => language?.ToLowerInvariant() switch
+    {
+        "csharp" or "cs" or "c#" => "cs",
+        "javascript" or "js" => "js",
+        "typescript" or "ts" => "ts",
+        "python" or "py" => "py",
+        "html" => "html",
+        "css" => "css",
+        "json" => "json",
+        "xml" => "xml",
+        "yaml" or "yml" => "yaml",
+        "markdown" or "md" => "md",
+        "sql" => "sql",
+        "bash" or "sh" or "shell" => "sh",
+        "powershell" or "ps1" or "pwsh" => "ps1",
+        "razor" => "razor",
+        "java" => "java",
+        "go" => "go",
+        "rust" or "rs" => "rs",
+        "cpp" or "c++" => "cpp",
+        "c" => "c",
+        "ruby" or "rb" => "rb",
+        "php" => "php",
+        "kotlin" or "kt" => "kt",
+        "swift" => "swift",
+        { Length: > 0 } other when other.All(char.IsAsciiLetterOrDigit) && other.Length <= 8 => other,
+        _ => "txt",
+    };
+
+    private static string Slug(string title)
+    {
+        var builder = new System.Text.StringBuilder(title.Length);
+        foreach (var c in title.Trim().ToLowerInvariant())
+        {
+            if (char.IsAsciiLetterOrDigit(c)) builder.Append(c);
+            else if (builder.Length > 0 && builder[^1] != '-') builder.Append('-');
+        }
+
+        var slug = builder.ToString().Trim('-');
+        return slug.Length == 0 ? "artifact" : slug;
+    }
+
+    /// <inheritdoc />
+    protected override ValueTask DisposeCoreAsync()
+    {
+        if (_subscribed is not null) _subscribed.Changed -= OnArtifactChanged;
+        _subscribed = null;
+        return ValueTask.CompletedTask;
+    }
+}

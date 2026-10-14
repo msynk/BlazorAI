@@ -17,7 +17,7 @@
 
             @if (Session is not null && CanRegenerate)
             {
-                <button type="button" class="bai-btn bai-btn--icon" title="@Strings.Regenerate" @onclick="RegenerateAsync">
+                <button type="button" class="bai-btn bai-btn--icon" title="@Strings.Regenerate" aria-label="@Strings.Regenerate" @onclick="RegenerateAsync">
                     <AiIcon Name="refresh" />
                 </button>
             }
@@ -27,6 +27,7 @@
                 <button type="button"
                         class="bai-btn bai-btn--icon @(Message.Feedback is FeedbackKind.Positive ? "bai-btn--active" : null)"
                         title="@Strings.GoodResponse"
+                        aria-label="@Strings.GoodResponse"
                         aria-pressed="@(Message.Feedback is FeedbackKind.Positive ? "true" : "false")"
                         @onclick="() => SetFeedbackAsync(FeedbackKind.Positive)">
                     <AiIcon Name="thumb-up" />
@@ -34,6 +35,7 @@
                 <button type="button"
                         class="bai-btn bai-btn--icon @(Message.Feedback is FeedbackKind.Negative ? "bai-btn--active" : null)"
                         title="@Strings.BadResponse"
+                        aria-label="@Strings.BadResponse"
                         aria-pressed="@(Message.Feedback is FeedbackKind.Negative ? "true" : "false")"
                         @onclick="() => SetFeedbackAsync(FeedbackKind.Negative)">
                     <AiIcon Name="thumb-down" />

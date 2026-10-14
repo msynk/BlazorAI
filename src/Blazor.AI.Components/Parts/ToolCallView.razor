@@ -21,6 +21,7 @@ else
         <button type="button"
                 class="bai-panel__header"
                 aria-expanded="@(_open ? "true" : "false")"
+                aria-controls="@_bodyId"
                 @onclick="() => _open = !_open">
             <AiIcon Name="chevron-right" Class="bai-panel__chevron" />
             <AiIcon Name="tool" />
@@ -55,7 +56,7 @@ else
 
         @if (_open)
         {
-            <div class="bai-panel__body">
+            <div class="bai-panel__body" id="@_bodyId">
                 @if (Call.Progress?.Message is { Length: > 0 } status)
                 {
                     <div class="bai-tool__status">@status</div>
@@ -102,6 +103,7 @@ else
 }
 
 @code {
+    private readonly string _bodyId = $"bai-tool-{Guid.NewGuid():N}";
     private RenderFragment? _custom;
     private ToolCallPart? _subscribed;
     private bool _open;

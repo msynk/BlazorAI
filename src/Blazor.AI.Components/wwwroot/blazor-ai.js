@@ -48,6 +48,7 @@ export function observeScroll(element, dotnet, threshold = 48) {
 }
 
 export function stopObservingScroll(element) {
+  if (!element) return;
   const state = scrollObservers.get(element);
   if (!state) return;
   element.removeEventListener('scroll', state.onScroll);
@@ -57,7 +58,9 @@ export function stopObservingScroll(element) {
 
 export function scrollToBottom(element, smooth = false) {
   if (!element) return;
-  element.scrollTo({ top: element.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+  // An explicit behaviour overrides the stylesheet, so reduced motion has to be honoured here too.
+  const animate = smooth && !prefersReducedMotion();
+  element.scrollTo({ top: element.scrollHeight, behavior: animate ? 'smooth' : 'auto' });
 }
 
 export function isAtBottom(element, threshold = 48) {
@@ -233,12 +236,13 @@ export function startDictation(dotnet, language) {
   if (!Recognition) return false;
 
   stopDictation();
-  recognition = new Recognition();
-  recognition.lang = language || navigator.language || 'en-US';
-  recognition.continuous = true;
-  recognition.interimResults = true;
+  const current = new Recognition();
+  recognition = current;
+  current.lang = language || navigator.language || 'en-US';
+  current.continuous = true;
+  current.interimResults = true;
 
-  recognition.onresult = (event) => {
+  current.onresult = (event) => {
     let final = '';
     let interim = '';
     for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -249,15 +253,26 @@ export function startDictation(dotnet, language) {
     dotnet.invokeMethodAsync('OnTranscriptReceived', final, interim).catch(() => {});
   };
 
-  recognition.onerror = (event) => {
+  current.onerror = (event) => {
+    if (recognition !== current) return;
     dotnet.invokeMethodAsync('OnDictationError', String(event.error ?? 'unknown')).catch(() => {});
   };
 
-  recognition.onend = () => {
+  // A recogniser that was stopped or replaced reports its end late; only the live one may tell
+  // .NET that dictation is over, or a quick stop-and-restart would show the button as off.
+  current.onend = () => {
+    if (recognition !== current) return;
+    recognition = null;
     dotnet.invokeMethodAsync('OnDictationEnded').catch(() => {});
   };
 
-  recognition.start();
+  try {
+    current.start();
+  } catch {
+    recognition = null;
+    return false;
+  }
+
   return true;
 }
 
@@ -284,19 +299,30 @@ export function prefersReducedMotion() {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
+const menuKeys = ['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'];
+
 /**
- * Stops Enter from inserting a newline when Enter is the submit key.
+ * Stops Enter from inserting a newline when Enter is the submit key, and stops the keys that drive
+ * the command and mention menu from also moving the caret or focus while that menu is open.
  *
  * Blazor cannot decide preventDefault per keystroke, so the decision is made here where the event
- * is: Enter alone is swallowed, Enter with any modifier is left to the browser.
+ * is: Enter alone is swallowed, Enter with any modifier is left to the browser. The menu marks the
+ * textarea with data-bai-menu-open while it is showing.
  */
 export function registerSubmitKey(element, submitOnEnter) {
   if (!element) return;
   const existing = submitKeyHandlers.get(element);
   if (existing) element.removeEventListener('keydown', existing);
-  if (!submitOnEnter) return;
+  submitKeyHandlers.delete(element);
 
   const handler = (event) => {
+    if (event.isComposing) return;
+    if (element.hasAttribute('data-bai-menu-open') && menuKeys.includes(event.key)) {
+      event.preventDefault();
+      return;
+    }
+
+    if (!submitOnEnter) return;
     if (event.key !== 'Enter') return;
     if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
     if (event.isComposing) return;

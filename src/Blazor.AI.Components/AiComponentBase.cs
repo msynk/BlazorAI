@@ -15,13 +15,23 @@ namespace Blazor.AI.Components;
 public abstract class AiComponentBase : ComponentBase, IAsyncDisposable
 {
     private RenderScheduler? _scheduler;
+    private AiUiOptions? _registeredOptions;
 
     /// <summary>The presentation settings in force, cascaded from the nearest provider.</summary>
     [CascadingParameter]
     public AiUiOptions? CascadedOptions { get; set; }
 
-    /// <summary>The settings this component should use.</summary>
-    protected AiUiOptions Options => CascadedOptions ?? AiUiOptions.Default;
+    [Inject]
+    private IServiceProvider ServiceProvider { get; set; } = default!;
+
+    /// <summary>
+    /// The settings this component should use: the cascaded ones, else the ones registered with
+    /// <c>AddBlazorAIComponents</c>, else the defaults.
+    /// </summary>
+    protected AiUiOptions Options => CascadedOptions ?? RegisteredOptions;
+
+    private AiUiOptions RegisteredOptions => _registeredOptions ??=
+        ServiceProvider?.GetService(typeof(AiUiOptions)) as AiUiOptions ?? AiUiOptions.Default;
 
     /// <summary>The user-facing text.</summary>
     protected AiStrings Strings => Options.Strings;
@@ -48,8 +58,15 @@ public abstract class AiComponentBase : ComponentBase, IAsyncDisposable
     protected virtual ValueTask DisposeCoreAsync() => ValueTask.CompletedTask;
 
     /// <inheritdoc />
+    /// <remarks>
+    /// The renderer calls only <see cref="IAsyncDisposable.DisposeAsync"/> on a component that
+    /// implements both disposal interfaces, so a derived component that implements
+    /// <see cref="IDisposable"/> has its <see cref="IDisposable.Dispose"/> called from here.
+    /// Without that, every event subscription released in <c>Dispose</c> would leak.
+    /// </remarks>
     public async ValueTask DisposeAsync()
     {
+        if (this is IDisposable disposable) disposable.Dispose();
         await DisposeCoreAsync().ConfigureAwait(false);
         if (_scheduler is not null) await _scheduler.DisposeAsync().ConfigureAwait(false);
         _scheduler = null;

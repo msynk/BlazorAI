@@ -12,7 +12,7 @@
 @if (Value is { } value)
 {
     <div class="bai-json @Class">
-        @RenderValue(value, null, 0)
+        @RenderValue(value, null, 0, "$")
     </div>
 }
 
@@ -35,9 +35,10 @@
     [Parameter]
     public string? Class { get; set; }
 
-    private RenderFragment RenderValue(JsonElement value, string? name, int depth) => builder =>
+    // The path identifies a node by its position from the root, so toggling one array item or one
+    // of two same-named keys in different branches does not toggle the others.
+    private RenderFragment RenderValue(JsonElement value, string? name, int depth, string path) => builder =>
     {
-        var path = name is null ? depth.ToString() : $"{depth}:{name}";
         var indent = $"padding-left:{depth * 1.1:0.##}rem";
 
         switch (value.ValueKind)
@@ -85,7 +86,7 @@
                     {
                         foreach (var property in value.EnumerateObject())
                         {
-                            builder.AddContent(14, RenderValue(property.Value, property.Name, depth + 1));
+                            builder.AddContent(14, RenderValue(property.Value, property.Name, depth + 1, $"{path}.{property.Name.Length}:{property.Name}"));
                         }
                     }
                     else
@@ -93,7 +94,7 @@
                         var index = 0;
                         foreach (var item in value.EnumerateArray())
                         {
-                            builder.AddContent(15, RenderValue(item, null, depth + 1));
+                            builder.AddContent(15, RenderValue(item, null, depth + 1, $"{path}[{index}]"));
                             index++;
                         }
                     }

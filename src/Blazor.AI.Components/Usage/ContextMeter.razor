@@ -9,12 +9,12 @@
     afterwards.
 *@
 
-@if (Window is { } window && window > 0)
+@if (_window is { } window && window > 0)
 {
-    <div class="bai-usage" title="@($"{Used:N0} / {window:N0} tokens")">
+    <div class="bai-usage" title="@($"{_used:N0} / {window:N0} tokens")">
         <span>@Strings.Context</span>
         <div class="bai-meter @Severity" role="progressbar"
-             aria-valuenow="@((int)(Fraction * 100))" aria-valuemin="0" aria-valuemax="100"
+             aria-valuenow="@((int)(Math.Min(1, Fraction) * 100))" aria-valuemin="0" aria-valuemax="100"
              aria-label="@Strings.Context">
             <div class="bai-meter__fill" style="width:@($"{Math.Min(1, Fraction) * 100:0}%")"></div>
         </div>
@@ -41,7 +41,13 @@
     [Parameter]
     public AiModel? Model { get; set; }
 
-    private double Fraction => Window is { } window && window > 0 ? (double)Used / window : 0;
+    // Derived values live in fields rather than being written back into the parameters: a parameter
+    // the parent does not pass is never reset, so a window filled in once would stick even after
+    // the model or the conversation changed.
+    private long _used;
+    private long? _window;
+
+    private double Fraction => _window is { } window && window > 0 ? (double)_used / window : 0;
 
     private string? Severity => Fraction switch
     {
@@ -53,14 +59,17 @@
     /// <inheritdoc />
     protected override void OnParametersSet()
     {
+        _used = Used;
+        _window = Window;
+
         if (Conversation is { } conversation)
         {
-            Used = conversation.TotalUsage.TotalTokens ?? Used;
-            Window ??= conversation.Messages
+            _used = conversation.TotalUsage.TotalTokens ?? _used;
+            _window ??= conversation.Messages
                 .Select(m => m.Metadata?.ContextWindow)
                 .LastOrDefault(w => w is not null);
         }
 
-        Window ??= Model?.ContextWindow;
+        _window ??= Model?.ContextWindow;
     }
 }

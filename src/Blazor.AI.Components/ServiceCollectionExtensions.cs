@@ -40,7 +40,18 @@ public static class AiComponentsServiceCollectionExtensions
         services.TryAddSingleton<AiRendererRegistry>();
         services.TryAddSingleton<GenerativeUiRegistry>();
         services.TryAddSingleton<IGenerativeUiRegistry>(sp => sp.GetRequiredService<GenerativeUiRegistry>());
-        services.TryAddSingleton(configure?.Invoke(AiUiOptions.Default) ?? AiUiOptions.Default);
+        if (configure is null)
+        {
+            services.TryAddSingleton(AiUiOptions.Default);
+        }
+        else
+        {
+            // Build on whatever is already registered rather than giving way to it: ConfigureAiRenderers
+            // and ConfigureGenerativeUi register the defaults themselves, and calling either of them
+            // first must not silently discard the options passed here.
+            var existing = services.LastOrDefault(d => d.ServiceType == typeof(AiUiOptions))?.ImplementationInstance as AiUiOptions;
+            services.Replace(ServiceDescriptor.Singleton(configure(existing ?? AiUiOptions.Default)));
+        }
 
         return services;
     }

@@ -107,4 +107,15 @@
         _self?.Dispose();
         _self = null;
     }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Removing the button must not leave the microphone running with nothing able to stop it.
+    /// </remarks>
+    protected override async ValueTask DisposeCoreAsync()
+    {
+        if (!_listening) return;
+        _listening = false;
+        await Interop.InvokeVoidAsync("stopDictation");
+    }
 }

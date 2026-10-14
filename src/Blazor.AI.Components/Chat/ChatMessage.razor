@@ -48,7 +48,7 @@
             {
                 <div class="bai-message__actions">
                     <CopyButton Content="@Message.GetText()" />
-                    <button type="button" class="bai-btn bai-btn--icon" title="@Strings.Edit" @onclick="StartEdit">
+                    <button type="button" class="bai-btn bai-btn--icon" title="@Strings.Edit" aria-label="@Strings.Edit" @onclick="StartEdit">
                         <AiIcon Name="edit" />
                     </button>
                 </div>

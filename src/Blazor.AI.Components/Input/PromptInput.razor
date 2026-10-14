@@ -31,13 +31,15 @@
 
     @if (_menuItems.Count > 0)
     {
-        <div class="bai-menu bai-menu--above" role="listbox">
+        <div class="bai-menu bai-menu--above" role="listbox" id="@_menuId">
             @for (var i = 0; i < _menuItems.Count; i++)
             {
                 var index = i;
                 var item = _menuItems[i];
                 <button type="button"
                         role="option"
+                        id="@OptionId(index)"
+                        tabindex="-1"
                         aria-selected="@(index == _menuIndex ? "true" : "false")"
                         class="bai-menu__item @(index == _menuIndex ? "bai-menu__item--active" : null)"
                         @onclick="() => AcceptMenuItemAsync(index)">
@@ -66,6 +68,9 @@
                   rows="1"
                   placeholder="@(Placeholder ?? Strings.PromptPlaceholder)"
                   aria-label="@(Placeholder ?? Strings.PromptPlaceholder)"
+                  aria-controls="@(_menuItems.Count > 0 ? _menuId : null)"
+                  aria-activedescendant="@(_menuItems.Count > 0 ? OptionId(_menuIndex) : null)"
+                  data-bai-menu-open="@(_menuItems.Count > 0 ? "true" : null)"
                   disabled="@Disabled"
                   value="@Value"
                   @oninput="OnInputAsync"
@@ -76,7 +81,9 @@
             {
                 <label class="bai-btn bai-btn--icon" title="@Strings.AttachFile">
                     <AiIcon Name="paperclip" />
-                    <InputFile OnChange="OnFilesSelectedAsync" multiple accept="@Accept" style="display:none" />
+                    @* Visually hidden rather than display:none, so the input stays in the tab order and
+                       the button is reachable from the keyboard. *@
+                    <InputFile OnChange="OnFilesSelectedAsync" multiple accept="@Accept" class="bai-sr-only" />
                     <span class="bai-sr-only">@Strings.AttachFile</span>
                 </label>
             }
@@ -124,6 +131,7 @@
 @code {
     private readonly List<Attachment> _attachments = [];
     private readonly List<MenuEntry> _menuItems = [];
+    private readonly string _menuId = $"bai-menu-{Guid.NewGuid():N}";
     private ElementReference _root;
     private ElementReference _textarea;
     private DotNetObjectReference<PromptInput>? _self;
@@ -433,6 +441,8 @@
         await ValueChanged.InvokeAsync(Value);
         await FocusAsync();
     }
+
+    private string OptionId(int index) => $"{_menuId}-{index}";
 
     private void CloseMenu()
     {

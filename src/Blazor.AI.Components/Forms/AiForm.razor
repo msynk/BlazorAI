@@ -204,7 +204,10 @@
 
             if (field.Type is AiFieldType.Number)
             {
-                if (!double.TryParse(value, out var number))
+                // A number input always reports its value in invariant form ("1.5"), whatever the
+                // page culture, so parsing with the current culture would read it as 15 in de-DE.
+                if (!double.TryParse(value, System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out var number))
                 {
                     _errors[field.Name] = $"{field.DisplayLabel} must be a number.";
                     continue;
