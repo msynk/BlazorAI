@@ -39,11 +39,11 @@
   --bai-color-info: #2f6feb;
   --bai-color-info-subtle: #eef3fe;
 
-  /* Message surfaces */
+  /* Message surfaces. The foregrounds default to --bai-color-fg where they are used rather than
+     here: a var() in a custom property resolves on :root, so a nested data-bai-theme would
+     otherwise inherit the light value. Set --bai-user-fg or --bai-assistant-fg to override. */
   --bai-user-bg: #f0f0f2;
-  --bai-user-fg: var(--bai-color-fg);
   --bai-assistant-bg: transparent;
-  --bai-assistant-fg: var(--bai-color-fg);
 
   /* Typography */
   --bai-font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
@@ -353,6 +353,7 @@
 }
 
 .bai-chat__footer {
+  position: relative;
   flex: 0 0 auto;
   padding: 0 var(--bai-space-4) var(--bai-space-4);
   background: linear-gradient(to top, var(--bai-color-bg) 62%, transparent);
@@ -379,11 +380,16 @@
   align-items: flex-end;
 }
 
+.bai-message--assistant .bai-message__body {
+  background: var(--bai-assistant-bg);
+  color: var(--bai-assistant-fg, var(--bai-color-fg));
+}
+
 .bai-message__bubble {
   max-width: min(100%, 40rem);
   padding: var(--bai-space-3) var(--bai-space-4);
   background: var(--bai-user-bg);
-  color: var(--bai-user-fg);
+  color: var(--bai-user-fg, var(--bai-color-fg));
   border-radius: var(--bai-radius-lg);
   border-bottom-right-radius: var(--bai-radius-sm);
   white-space: pre-wrap;
@@ -1598,8 +1604,9 @@
 .bai-scroll-latest {
   position: absolute;
   left: 50%;
-  bottom: var(--bai-space-3);
-  transform: translateX(-50%);
+  bottom: calc(100% + var(--bai-space-2));
+  /* translate, not transform, so the fade-up animation does not knock it off centre. */
+  translate: -50% 0;
   z-index: 3;
   border: 1px solid var(--bai-color-border);
   background: var(--bai-color-bg);

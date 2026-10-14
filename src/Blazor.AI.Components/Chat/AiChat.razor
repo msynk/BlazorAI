@@ -42,9 +42,10 @@
             </EmptyContent>
         </MessageList>
 
-        <ScrollToLatest Visible="@(!_pinned)" OnClick="ScrollToLatestAsync" />
-
         <div class="bai-chat__footer">
+            @* Inside the footer so it sits just above the composer, whatever height the composer has. *@
+            <ScrollToLatest Visible="@(!_pinned)" OnClick="ScrollToLatestAsync" />
+
             <div class="bai-chat__footer-inner">
                 @if (ComposerContent is not null)
                 {
