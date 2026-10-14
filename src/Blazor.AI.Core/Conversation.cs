@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+
 namespace Blazor.AI;
 
 /// <summary>
@@ -13,12 +15,18 @@ namespace Blazor.AI;
 /// <para>
 /// Artifacts are held here rather than on messages so revisions across turns update one object.
 /// </para>
+/// <para>
+/// Safe for one writer and concurrent readers. The message list is copy-on-write and the artifact
+/// and run maps are concurrent, because the stream mutates them off the renderer's thread while the
+/// list is being enumerated.
+/// </para>
 /// </remarks>
 public sealed class Conversation : IConversation
 {
-    private readonly List<AiMessage> _messages = [];
-    private readonly Dictionary<string, Artifact> _artifacts = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, AgentRun> _runs = new(StringComparer.Ordinal);
+    private readonly object _gate = new();
+    private volatile AiMessage[] _messages = [];
+    private readonly ConcurrentDictionary<string, Artifact> _artifacts = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, AgentRun> _runs = new(StringComparer.Ordinal);
     private int _version;
 
     /// <summary>Creates a conversation.</summary>
@@ -60,10 +68,10 @@ public sealed class Conversation : IConversation
     public int Version => _version;
 
     /// <summary>The last message, or <see langword="null"/> when the conversation is empty.</summary>
-    public AiMessage? LastMessage => _messages.Count > 0 ? _messages[^1] : null;
+    public AiMessage? LastMessage => _messages is [.., var last] ? last : null;
 
     /// <summary><see langword="true"/> when a message is pending or streaming.</summary>
-    public bool IsGenerating => _messages.Count > 0 && _messages[^1].IsBusy;
+    public bool IsGenerating => LastMessage is { IsBusy: true };
 
     /// <summary>Token usage summed across every assistant message.</summary>
     public TokenUsage TotalUsage
@@ -103,7 +111,7 @@ public sealed class Conversation : IConversation
     {
         ArgumentNullException.ThrowIfNull(message);
         Attach(message);
-        _messages.Add(message);
+        lock (_gate) _messages = [.. _messages, message];
         Touch();
         MessageAdded?.Invoke(this, message);
         return message;
@@ -125,11 +133,17 @@ public sealed class Conversation : IConversation
     /// <returns><see langword="true"/> when a message was removed.</returns>
     public bool RemoveMessage(string messageId)
     {
-        var index = _messages.FindIndex(m => m.MessageId == messageId);
-        if (index < 0) return false;
-        var message = _messages[index];
+        AiMessage message;
+        lock (_gate)
+        {
+            var messages = _messages;
+            var index = Array.FindIndex(messages, m => m.MessageId == messageId);
+            if (index < 0) return false;
+            message = messages[index];
+            _messages = [.. messages.AsSpan(0, index), .. messages.AsSpan(index + 1)];
+        }
+
         Detach(message);
-        _messages.RemoveAt(index);
         Touch();
         MessageRemoved?.Invoke(this, message);
         return true;
@@ -140,9 +154,10 @@ public sealed class Conversation : IConversation
     /// <returns>The message, or <see langword="null"/> when it is not in this conversation.</returns>
     public AiMessage? FindMessage(string messageId)
     {
-        for (var i = _messages.Count - 1; i >= 0; i--)
+        var messages = _messages;
+        for (var i = messages.Length - 1; i >= 0; i--)
         {
-            if (_messages[i].MessageId == messageId) return _messages[i];
+            if (messages[i].MessageId == messageId) return messages[i];
         }
 
         return null;
@@ -156,14 +171,20 @@ public sealed class Conversation : IConversation
     /// <returns>The removed messages, newest first.</returns>
     public IReadOnlyList<AiMessage> TruncateAfter(string messageId, bool inclusive = false)
     {
-        var index = _messages.FindIndex(m => m.MessageId == messageId);
-        if (index < 0) return [];
+        List<AiMessage> removed;
+        lock (_gate)
+        {
+            var messages = _messages;
+            var index = Array.FindIndex(messages, m => m.MessageId == messageId);
+            if (index < 0) return [];
 
-        var from = inclusive ? index : index + 1;
-        if (from >= _messages.Count) return [];
+            var from = inclusive ? index : index + 1;
+            if (from >= messages.Length) return [];
 
-        var removed = _messages.GetRange(from, _messages.Count - from);
-        _messages.RemoveRange(from, _messages.Count - from);
+            removed = [.. messages.AsSpan(from)];
+            _messages = messages[..from];
+        }
+
         foreach (var message in removed)
         {
             Detach(message);
@@ -178,9 +199,14 @@ public sealed class Conversation : IConversation
     /// <summary>Removes every message.</summary>
     public void Clear()
     {
-        var removed = _messages.ToArray();
+        AiMessage[] removed;
+        lock (_gate)
+        {
+            removed = _messages;
+            _messages = [];
+        }
+
         foreach (var message in removed) Detach(message);
-        _messages.Clear();
         foreach (var message in removed) MessageRemoved?.Invoke(this, message);
         Touch();
     }
@@ -203,8 +229,8 @@ public sealed class Conversation : IConversation
     {
         if (_artifacts.TryGetValue(artifactId, out var existing)) return existing;
         var artifact = new Artifact(artifactId, kind, title);
+        if (!_artifacts.TryAdd(artifactId, artifact)) return _artifacts[artifactId];
         artifact.Changed += OnArtifactChanged;
-        _artifacts[artifactId] = artifact;
         Touch();
         return artifact;
     }
@@ -222,8 +248,8 @@ public sealed class Conversation : IConversation
     {
         if (_runs.TryGetValue(runId, out var existing)) return existing;
         var run = new AgentRun(runId);
+        if (!_runs.TryAdd(runId, run)) return _runs[runId];
         run.Changed += OnRunChanged;
-        _runs[runId] = run;
         Touch();
         return run;
     }
@@ -239,7 +265,7 @@ public sealed class Conversation : IConversation
     {
         var preview = LastMessage?.GetText();
         if (preview is { Length: > 140 }) preview = string.Concat(preview.AsSpan(0, 140), "...");
-        return new ConversationSummary(ConversationId, Title, UpdatedAt, preview, _messages.Count);
+        return new ConversationSummary(ConversationId, Title, UpdatedAt, preview, _messages.Length);
     }
 
     private void Attach(AiMessage message)

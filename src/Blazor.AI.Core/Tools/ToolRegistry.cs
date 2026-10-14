@@ -74,7 +74,11 @@ public sealed class DefaultToolApprovalPolicy : IToolApprovalPolicy
     {
         ArgumentNullException.ThrowIfNull(definition);
 
-        if (_alwaysApproved.Contains(definition.Name)) return ValueTask.FromResult(false);
+        // Tools in one round are checked concurrently while the UI may be recording an "always".
+        bool alwaysApproved;
+        lock (_alwaysApproved) alwaysApproved = _alwaysApproved.Contains(definition.Name);
+
+        if (alwaysApproved) return ValueTask.FromResult(false);
         if (definition.RequiresApproval is { } explicitChoice) return ValueTask.FromResult(explicitChoice);
         return ValueTask.FromResult(definition.Risk is ToolRisk.Destructive);
     }

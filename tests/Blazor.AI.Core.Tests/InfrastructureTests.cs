@@ -48,6 +48,91 @@ public sealed class RenderSchedulerTests
 
         Assert.Equal(0, renders);
     }
+
+    [Fact]
+    public async Task AFlushRequestedWhileAnotherIsRunningIsNotDropped()
+    {
+        var renders = 0;
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var scheduler = new RenderScheduler(
+            async () =>
+            {
+                if (Interlocked.Increment(ref renders) == 1) await gate.Task;
+            },
+            TimeSpan.FromMilliseconds(10));
+
+        var first = scheduler.FlushAsync();
+        await scheduler.FlushAsync();
+        gate.SetResult();
+        await first;
+
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (Volatile.Read(ref renders) < 2 && DateTime.UtcNow < deadline) await Task.Delay(5);
+
+        Assert.Equal(2, Volatile.Read(ref renders));
+    }
+
+    [Fact]
+    public async Task RequestsRacingDisposalNeverThrow()
+    {
+        for (var i = 0; i < 200; i++)
+        {
+            var scheduler = new RenderScheduler(() => Task.CompletedTask, TimeSpan.FromMilliseconds(1));
+            var requests = Task.Run(() =>
+            {
+                for (var j = 0; j < 50; j++) scheduler.Request();
+            });
+
+            await scheduler.DisposeAsync();
+            await requests;
+        }
+    }
+}
+
+public sealed class DependencyInjectionTests
+{
+    [Fact]
+    public void TheApprovalPolicyIsScopedSoOneUsersAlwaysAllowDoesNotApplyToAnother()
+    {
+        var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
+        services.AddBlazorAI();
+
+        var descriptor = Assert.Single(services, d => d.ServiceType == typeof(IToolApprovalPolicy));
+        Assert.Equal(Microsoft.Extensions.DependencyInjection.ServiceLifetime.Scoped, descriptor.Lifetime);
+        Assert.Equal(Microsoft.Extensions.DependencyInjection.ServiceLifetime.Scoped,
+            Assert.Single(services, d => d.ServiceType == typeof(ChatSessionFactory)).Lifetime);
+    }
+
+    [Fact]
+    public void AReplacementApprovalPolicyIsScopedSoItCanDependOnTheCurrentUser()
+    {
+        var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
+        services.AddBlazorAI().UseApprovalPolicy<DefaultToolApprovalPolicy>();
+
+        var descriptor = Assert.Single(services, d => d.ServiceType == typeof(IToolApprovalPolicy));
+        Assert.Equal(Microsoft.Extensions.DependencyInjection.ServiceLifetime.Scoped, descriptor.Lifetime);
+    }
+
+    [Fact]
+    public async Task AlwaysApprovalsCanBeRecordedWhileCallsAreBeingChecked()
+    {
+        var policy = new DefaultToolApprovalPolicy();
+        var invocation = new ToolInvocation("c", "t", default);
+
+        var writer = Task.Run(() =>
+        {
+            for (var i = 0; i < 5000; i++) policy.RememberAlwaysApproved($"tool_{i}");
+        });
+
+        while (!writer.IsCompleted)
+        {
+            await policy.RequiresApprovalAsync(new AiToolDefinition("tool_1") { Risk = ToolRisk.Destructive }, invocation);
+        }
+
+        await writer;
+        Assert.False(await policy.RequiresApprovalAsync(
+            new AiToolDefinition("tool_4999") { Risk = ToolRisk.Destructive }, invocation));
+    }
 }
 
 public sealed class TextPacingTests
@@ -101,6 +186,63 @@ public sealed class TextPacingTests
         await foreach (var _ in Replay(source).Paced(options)) count++;
 
         Assert.True(count > 1, "A 200 character burst should be released over several ticks.");
+    }
+
+    [Fact]
+    public async Task PacingNeverSplitsASurrogatePair()
+    {
+        var source = new AiEvent[] { new TextDeltaEvent(string.Concat(Enumerable.Repeat("a\U0001F600", 20))) };
+        var options = new TextPacingOptions
+        {
+            Interval = TimeSpan.FromMilliseconds(1),
+            TargetDrain = TimeSpan.FromMilliseconds(100),
+            MaxCharsPerTick = 2,
+        };
+
+        var deltas = new List<string>();
+        await foreach (var evt in Replay(source).Paced(options))
+        {
+            if (evt is TextDeltaEvent text) deltas.Add(text.Delta);
+        }
+
+        Assert.True(deltas.Count > 1);
+        Assert.All(deltas, delta =>
+        {
+            Assert.False(char.IsHighSurrogate(delta[^1]), "A delta ended with half a surrogate pair.");
+            Assert.False(char.IsLowSurrogate(delta[0]), "A delta started with half a surrogate pair.");
+        });
+    }
+
+    [Fact]
+    public async Task AConsumerThatStopsEarlyAlsoStopsTheSource()
+    {
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await foreach (var _ in Endless(stopped).Paced(TextPacingOptions.Default))
+        {
+            break;
+        }
+
+        var finished = await Task.WhenAny(stopped.Task, Task.Delay(2000));
+        Assert.Same(stopped.Task, finished);
+    }
+
+    private static async IAsyncEnumerable<AiEvent> Endless(
+        TaskCompletionSource stopped,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(5, cancellationToken);
+                yield return new StatusEvent("working");
+            }
+        }
+        finally
+        {
+            stopped.TrySetResult();
+        }
     }
 
     private static async IAsyncEnumerable<AiEvent> Replay(IEnumerable<AiEvent> events)

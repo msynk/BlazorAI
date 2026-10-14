@@ -28,7 +28,9 @@ public static class BlazorAiServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.TryAddSingleton<IToolApprovalPolicy, DefaultToolApprovalPolicy>();
+        // Scoped, not singleton: the default policy remembers "allow always" decisions, and on Blazor
+        // Server a singleton would carry one user's decision over to every other user.
+        services.TryAddScoped<IToolApprovalPolicy, DefaultToolApprovalPolicy>();
         services.TryAddSingleton<IToolRegistry>(sp => new ToolRegistry(sp.GetServices<IAiTool>()));
         services.TryAddSingleton(new ChatSessionOptions());
         services.TryAddScoped<ChatSessionFactory>();

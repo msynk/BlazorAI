@@ -66,7 +66,10 @@ public static class AiEventStreamExtensions
             SingleWriter = true,
         });
 
-        _ = PumpAsync(source, channel.Writer, cancellationToken);
+        // The pump gets its own token so that a consumer that stops early, or throws, also stops the
+        // source. Otherwise the transport keeps streaming into the channel with nobody reading it.
+        using var pumpCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _ = PumpAsync(source, channel.Writer, pumpCts.Token);
 
         var pending = new StringBuilder();
         string? pendingPartId = null;
@@ -74,52 +77,63 @@ public static class AiEventStreamExtensions
         var completed = false;
         var ticksToDrain = Math.Max(1, (int)(settings.TargetDrain.Ticks / Math.Max(1, settings.Interval.Ticks)));
 
-        while (true)
+        try
         {
-            while (channel.Reader.TryRead(out var evt))
+            while (true)
             {
-                if (evt is TextDeltaEvent text
-                    && (pending.Length == 0 || (text.PartId == pendingPartId && text.MessageId == pendingMessageId)))
+                while (channel.Reader.TryRead(out var evt))
                 {
-                    pendingPartId = text.PartId;
-                    pendingMessageId = text.MessageId;
-                    pending.Append(text.Delta);
+                    if (evt is TextDeltaEvent text
+                        && (pending.Length == 0 || (text.PartId == pendingPartId && text.MessageId == pendingMessageId)))
+                    {
+                        pendingPartId = text.PartId;
+                        pendingMessageId = text.MessageId;
+                        pending.Append(text.Delta);
+                        continue;
+                    }
+
+                    while (pending.Length > 0)
+                    {
+                        yield return Take(pending, pending.Length, pendingPartId, pendingMessageId);
+                    }
+
+                    yield return evt;
+                }
+
+                if (pending.Length > 0)
+                {
+                    var size = Math.Clamp(
+                        (pending.Length + ticksToDrain - 1) / ticksToDrain,
+                        settings.MinCharsPerTick,
+                        settings.MaxCharsPerTick);
+
+                    yield return Take(pending, size, pendingPartId, pendingMessageId);
+
+                    if (pending.Length > 0 || !completed)
+                    {
+                        await Task.Delay(settings.Interval, cancellationToken).ConfigureAwait(false);
+                    }
+
                     continue;
                 }
 
-                while (pending.Length > 0)
-                {
-                    yield return Take(pending, pending.Length, pendingPartId, pendingMessageId);
-                }
-
-                yield return evt;
+                if (completed) yield break;
+                if (!await channel.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false)) completed = true;
             }
-
-            if (pending.Length > 0)
-            {
-                var size = Math.Clamp(
-                    (pending.Length + ticksToDrain - 1) / ticksToDrain,
-                    settings.MinCharsPerTick,
-                    settings.MaxCharsPerTick);
-
-                yield return Take(pending, size, pendingPartId, pendingMessageId);
-
-                if (pending.Length > 0 || !completed)
-                {
-                    await Task.Delay(settings.Interval, cancellationToken).ConfigureAwait(false);
-                }
-
-                continue;
-            }
-
-            if (completed) yield break;
-            if (!await channel.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false)) completed = true;
+        }
+        finally
+        {
+            pumpCts.Cancel();
         }
     }
 
     private static TextDeltaEvent Take(StringBuilder pending, int count, string? partId, string? messageId)
     {
         count = Math.Min(count, pending.Length);
+
+        // Never split a surrogate pair: each half alone renders as a replacement character.
+        if (count > 0 && count < pending.Length && char.IsHighSurrogate(pending[count - 1])) count++;
+
         var chunk = pending.ToString(0, count);
         pending.Remove(0, count);
         return new TextDeltaEvent(chunk) { PartId = partId, MessageId = messageId };

@@ -16,12 +16,19 @@ namespace Blazor.AI;
 /// Content is accumulated in a builder for the same reason text parts are: a long artifact streamed
 /// character by character must not be quadratic.
 /// </para>
+/// <para>
+/// Safe for one writer and concurrent readers: the panel renders while content streams in on the
+/// transport's thread, so the builder is only touched under a lock, readers get a cached snapshot,
+/// and the version history is replaced rather than mutated.
+/// </para>
 /// </remarks>
 public sealed class Artifact : IArtifact
 {
     private readonly StringBuilder _content = new(1024);
-    private readonly List<ArtifactVersion> _versions = [];
-    private string? _cachedContent;
+    private readonly object _gate = new();
+    private volatile ArtifactVersion[] _versions = [];
+    private volatile string? _cachedContent;
+    private volatile int _length;
     private int _version;
 
     /// <summary>Creates an artifact.</summary>
@@ -47,7 +54,14 @@ public sealed class Artifact : IArtifact
     public string Title { get; private set; }
 
     /// <inheritdoc />
-    public string? Content => _cachedContent ??= _content.ToString();
+    public string? Content
+    {
+        get
+        {
+            if (_cachedContent is { } cached) return cached;
+            lock (_gate) return _cachedContent ??= _content.ToString();
+        }
+    }
 
     /// <inheritdoc />
     public string? Language { get; set; }
@@ -74,7 +88,7 @@ public sealed class Artifact : IArtifact
     public IReadOnlyList<ArtifactVersion> Versions => _versions;
 
     /// <summary>How many characters the current content holds, without materialising it.</summary>
-    public int Length => _content.Length;
+    public int Length => _length;
 
     /// <summary>Increments on every change, for cheap render checks.</summary>
     public int ChangeVersion => _version;
@@ -87,8 +101,13 @@ public sealed class Artifact : IArtifact
     public void Append(string? delta)
     {
         if (string.IsNullOrEmpty(delta)) return;
-        _content.Append(delta);
-        _cachedContent = null;
+        lock (_gate)
+        {
+            _content.Append(delta);
+            _length = _content.Length;
+            _cachedContent = null;
+        }
+
         Touch();
     }
 
@@ -96,9 +115,14 @@ public sealed class Artifact : IArtifact
     /// <param name="content">The new content.</param>
     public void SetContent(string? content)
     {
-        _content.Clear();
-        if (content is not null) _content.Append(content);
-        _cachedContent = content;
+        lock (_gate)
+        {
+            _content.Clear();
+            if (content is not null) _content.Append(content);
+            _length = _content.Length;
+            _cachedContent = content;
+        }
+
         Touch();
     }
 
@@ -117,8 +141,11 @@ public sealed class Artifact : IArtifact
     /// <param name="summary">A short description of what changed.</param>
     public void Complete(string? summary = null)
     {
+        // Completing a finished revision again, for example a created event that carried the content
+        // followed by a completed event, must not record the same version twice.
+        if (!IsStreaming) return;
         IsStreaming = false;
-        _versions.Add(new ArtifactVersion(Version, Content, DateTimeOffset.UtcNow, summary));
+        _versions = [.. _versions, new ArtifactVersion(Version, Content, DateTimeOffset.UtcNow, summary)];
         Touch();
     }
 
@@ -134,8 +161,13 @@ public sealed class Artifact : IArtifact
         if (IsStreaming) Complete();
         Version++;
         IsStreaming = true;
-        _content.Clear();
-        _cachedContent = null;
+        lock (_gate)
+        {
+            _content.Clear();
+            _length = 0;
+            _cachedContent = null;
+        }
+
         Touch();
     }
 

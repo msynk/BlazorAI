@@ -17,12 +17,19 @@ namespace Blazor.AI;
 /// inside an existing part. A message component subscribes to the first, a part component to the
 /// second, so a token arriving in the third of six parts re-renders one small subtree.
 /// </para>
+/// <para>
+/// The part, attachment, and citation lists are copy-on-write: a writer replaces the array under a
+/// lock, and readers always see an immutable snapshot. Events are applied on the transport's thread
+/// while the renderer enumerates these lists, and a <see cref="List{T}"/> enumerated during an add
+/// throws. Structural changes are rare next to deltas, so copying on each one is cheap.
+/// </para>
 /// </remarks>
 public sealed class AiMessage : IAiMessage
 {
-    private readonly List<MessagePart> _parts = [];
-    private readonly List<Attachment> _attachments = [];
-    private readonly List<Citation> _citations = [];
+    private readonly object _gate = new();
+    private volatile MessagePart[] _parts = [];
+    private volatile Attachment[] _attachments = [];
+    private volatile Citation[] _citations = [];
     private int _version;
 
     /// <summary>Creates a message.</summary>
@@ -107,7 +114,7 @@ public sealed class AiMessage : IAiMessage
     {
         ArgumentNullException.ThrowIfNull(part);
         part.Message = this;
-        _parts.Add(part);
+        lock (_gate) _parts = [.. _parts, part];
         NotifyChanged();
         return part;
     }
@@ -120,8 +127,14 @@ public sealed class AiMessage : IAiMessage
     public TPart InsertPart<TPart>(int index, TPart part) where TPart : MessagePart
     {
         ArgumentNullException.ThrowIfNull(part);
+        lock (_gate)
+        {
+            var parts = new List<MessagePart>(_parts);
+            parts.Insert(index, part);
+            _parts = [.. parts];
+        }
+
         part.Message = this;
-        _parts.Insert(index, part);
         NotifyChanged();
         return part;
     }
@@ -131,10 +144,17 @@ public sealed class AiMessage : IAiMessage
     /// <returns><see langword="true"/> when a part was removed.</returns>
     public bool RemovePart(string partId)
     {
-        var index = _parts.FindIndex(p => p.PartId == partId);
-        if (index < 0) return false;
-        _parts[index].Message = null;
-        _parts.RemoveAt(index);
+        MessagePart removed;
+        lock (_gate)
+        {
+            var parts = _parts;
+            var index = Array.FindIndex(parts, p => p.PartId == partId);
+            if (index < 0) return false;
+            removed = parts[index];
+            _parts = [.. parts.AsSpan(0, index), .. parts.AsSpan(index + 1)];
+        }
+
+        removed.Message = null;
         NotifyChanged();
         return true;
     }
@@ -144,9 +164,10 @@ public sealed class AiMessage : IAiMessage
     /// <returns>The part, or <see langword="null"/> when the message has no such part.</returns>
     public MessagePart? FindPart(string partId)
     {
-        for (var i = 0; i < _parts.Count; i++)
+        var parts = _parts;
+        for (var i = 0; i < parts.Length; i++)
         {
-            if (_parts[i].PartId == partId) return _parts[i];
+            if (parts[i].PartId == partId) return parts[i];
         }
 
         return null;
@@ -173,8 +194,9 @@ public sealed class AiMessage : IAiMessage
     public TPart GetOrCreateOpenPart<TPart>(string kind, Func<TPart> factory) where TPart : MessagePart
     {
         ArgumentNullException.ThrowIfNull(factory);
-        if (_parts.Count > 0
-            && _parts[^1] is TPart last
+        var parts = _parts;
+        if (parts.Length > 0
+            && parts[^1] is TPart last
             && string.Equals(last.Kind, kind, StringComparison.Ordinal)
             && last is not IStreamablePart { IsStreaming: false })
         {
@@ -194,9 +216,10 @@ public sealed class AiMessage : IAiMessage
     /// <returns>The tool call part, or <see langword="null"/> when the message has no such call.</returns>
     public ToolCallPart? FindToolCall(string toolCallId)
     {
-        for (var i = _parts.Count - 1; i >= 0; i--)
+        var parts = _parts;
+        for (var i = parts.Length - 1; i >= 0; i--)
         {
-            if (_parts[i] is ToolCallPart call && call.ToolCallId == toolCallId) return call;
+            if (parts[i] is ToolCallPart call && call.ToolCallId == toolCallId) return call;
         }
 
         return null;
@@ -207,7 +230,7 @@ public sealed class AiMessage : IAiMessage
     public void AddAttachment(Attachment attachment)
     {
         ArgumentNullException.ThrowIfNull(attachment);
-        _attachments.Add(attachment);
+        lock (_gate) _attachments = [.. _attachments, attachment];
         NotifyChanged();
     }
 
@@ -216,9 +239,14 @@ public sealed class AiMessage : IAiMessage
     /// <returns><see langword="true"/> when an attachment was removed.</returns>
     public bool RemoveAttachment(string attachmentId)
     {
-        var index = _attachments.FindIndex(a => a.AttachmentId == attachmentId);
-        if (index < 0) return false;
-        _attachments.RemoveAt(index);
+        lock (_gate)
+        {
+            var attachments = _attachments;
+            var index = Array.FindIndex(attachments, a => a.AttachmentId == attachmentId);
+            if (index < 0) return false;
+            _attachments = [.. attachments.AsSpan(0, index), .. attachments.AsSpan(index + 1)];
+        }
+
         NotifyChanged();
         return true;
     }
@@ -235,15 +263,21 @@ public sealed class AiMessage : IAiMessage
     {
         ArgumentNullException.ThrowIfNull(citation);
 
-        var existing = _citations.FirstOrDefault(c => c.CitationId == citation.CitationId);
-        if (existing is not null) return existing;
+        Citation stored;
+        lock (_gate)
+        {
+            var citations = _citations;
+            var existing = citations.FirstOrDefault(c => c.CitationId == citation.CitationId);
+            if (existing is not null) return existing;
 
-        var number = _citations
-            .FirstOrDefault(c => c.Source.SourceId == citation.Source.SourceId)?.Number
-            ?? _citations.Select(c => c.Number ?? 0).DefaultIfEmpty(0).Max() + 1;
+            var number = citations
+                .FirstOrDefault(c => c.Source.SourceId == citation.Source.SourceId)?.Number
+                ?? citations.Select(c => c.Number ?? 0).DefaultIfEmpty(0).Max() + 1;
 
-        var stored = citation with { Number = citation.Number ?? number };
-        _citations.Add(stored);
+            stored = citation with { Number = citation.Number ?? number };
+            _citations = [.. citations, stored];
+        }
+
         NotifyChanged();
         return stored;
     }
@@ -327,10 +361,11 @@ public sealed class AiMessage : IAiMessage
     /// <inheritdoc />
     public string GetText()
     {
-        if (_parts.Count == 1 && _parts[0] is TextPart single) return single.Text;
+        var parts = _parts;
+        if (parts.Length == 1 && parts[0] is TextPart single and not ReasoningPart) return single.Text;
 
         var builder = new StringBuilder();
-        foreach (var part in _parts)
+        foreach (var part in parts)
         {
             if (part is ReasoningPart) continue;
             if (part is not ITextualPart { Text: { Length: > 0 } text }) continue;

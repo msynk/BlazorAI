@@ -20,7 +20,10 @@ namespace Blazor.AI;
 /// </remarks>
 public sealed class ToolCallPart : MessagePart, IStreamablePart
 {
+    // The builder and the lazily parsed view are only touched under _gate: arguments stream in on the
+    // transport's thread while the card reads them during render.
     private readonly StringBuilder _rawArguments = new(128);
+    private readonly object _gate = new();
     private JsonElement? _arguments;
     private JsonElement? _partialArguments;
     private bool _partialArgumentsStale = true;
@@ -59,10 +62,22 @@ public sealed class ToolCallPart : MessagePart, IStreamablePart
     public bool IsStreaming => Status is ToolCallStatus.Streaming;
 
     /// <summary>The raw JSON argument text received so far.</summary>
-    public string RawArguments => _rawArguments.ToString();
+    public string RawArguments
+    {
+        get
+        {
+            lock (_gate) return _rawArguments.ToString();
+        }
+    }
 
     /// <summary>The parsed arguments, available once the call completes.</summary>
-    public JsonElement? Arguments => _arguments;
+    public JsonElement? Arguments
+    {
+        get
+        {
+            lock (_gate) return _arguments;
+        }
+    }
 
     /// <summary>The human decision on this call, when approval was required.</summary>
     public ApprovalDecision Approval { get; private set; } = ApprovalDecision.Undecided;
@@ -98,11 +113,14 @@ public sealed class ToolCallPart : MessagePart, IStreamablePart
     {
         get
         {
-            if (_arguments is not null) return _arguments;
-            if (!_partialArgumentsStale) return _partialArguments;
-            _partialArguments = PartialJson.TryParse(_rawArguments.ToString());
-            _partialArgumentsStale = false;
-            return _partialArguments;
+            lock (_gate)
+            {
+                if (_arguments is not null) return _arguments;
+                if (!_partialArgumentsStale) return _partialArguments;
+                _partialArguments = PartialJson.TryParse(_rawArguments.ToString());
+                _partialArgumentsStale = false;
+                return _partialArguments;
+            }
         }
     }
 
@@ -111,8 +129,12 @@ public sealed class ToolCallPart : MessagePart, IStreamablePart
     public void AppendArguments(string? delta)
     {
         if (string.IsNullOrEmpty(delta)) return;
-        _rawArguments.Append(delta);
-        _partialArgumentsStale = true;
+        lock (_gate)
+        {
+            _rawArguments.Append(delta);
+            _partialArgumentsStale = true;
+        }
+
         NotifyChanged();
     }
 
@@ -124,8 +146,12 @@ public sealed class ToolCallPart : MessagePart, IStreamablePart
     /// </param>
     public void CompleteArguments(JsonElement? arguments = null)
     {
-        _arguments = arguments ?? PartialJson.TryParseComplete(_rawArguments.ToString()) ?? EmptyObject;
-        if (arguments is { } supplied && _rawArguments.Length == 0) _rawArguments.Append(supplied.GetRawText());
+        lock (_gate)
+        {
+            _arguments = arguments ?? PartialJson.TryParseComplete(_rawArguments.ToString()) ?? EmptyObject;
+            if (arguments is { } supplied && _rawArguments.Length == 0) _rawArguments.Append(supplied.GetRawText());
+        }
+
         if (Status is ToolCallStatus.Streaming) Status = ToolCallStatus.Pending;
         NotifyChanged();
     }

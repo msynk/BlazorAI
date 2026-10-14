@@ -217,4 +217,241 @@ public sealed class ModelTests
 
         Assert.Equal("hi", await reader.ReadToEndAsync());
     }
+
+    [Fact]
+    public void ReasoningIsLeftOutOfTheTextEvenWhenItIsTheOnlyPart()
+    {
+        var message = new AiMessage(AiRole.Assistant);
+        message.AddPart(new ReasoningPart("private chain of thought"));
+
+        Assert.Equal(string.Empty, message.GetText());
+    }
+}
+
+/// <summary>
+/// Transports apply events off the renderer's thread while components read the same objects during
+/// render. Each test runs one writer against a reader looping on the hot read paths.
+/// </summary>
+public sealed class ThreadSafetyTests
+{
+    private const int Writes = 20_000;
+
+    [Fact]
+    public async Task TextCanBeReadWhileItIsBeingAppended()
+    {
+        var part = new TextPart();
+
+        await RaceAsync(
+            () =>
+            {
+                for (var i = 0; i < Writes; i++) part.Append("token ");
+            },
+            () =>
+            {
+                var text = part.Text;
+                Assert.True(text.Length % 6 == 0, "A reader saw a torn append.");
+                _ = part.Length;
+                _ = part.IsEmpty;
+            });
+
+        Assert.Equal(Writes * 6, part.Text.Length);
+    }
+
+    [Fact]
+    public async Task ReasoningCanBeReadWhileItIsBeingAppended()
+    {
+        var part = new ReasoningPart();
+
+        await RaceAsync(
+            () =>
+            {
+                for (var i = 0; i < Writes; i++) part.Append("x");
+            },
+            () => _ = part.Text);
+
+        Assert.Equal(Writes, part.Length);
+    }
+
+    [Fact]
+    public async Task ToolArgumentsCanBeReadWhileTheyStreamIn()
+    {
+        var call = new ToolCallPart("c1", "search");
+
+        await RaceAsync(
+            () =>
+            {
+                call.AppendArguments("{\"q\":\"");
+                for (var i = 0; i < Writes / 10; i++) call.AppendArguments("a");
+                call.AppendArguments("\"}");
+                call.CompleteArguments();
+            },
+            () =>
+            {
+                _ = call.RawArguments;
+                _ = call.DisplayArguments;
+                _ = call.Arguments;
+            });
+
+        Assert.Equal(Writes / 10, call.Arguments!.Value.GetProperty("q").GetString()!.Length);
+    }
+
+    [Fact]
+    public async Task StructuredAndGenerativePayloadsCanBeReadWhileTheyStreamIn()
+    {
+        var structured = new StructuredDataPart("list");
+        var generative = new GenerativeUiPart("card");
+
+        await RaceAsync(
+            () =>
+            {
+                structured.Append("[");
+                generative.AppendProps("""{"items":[""");
+                for (var i = 0; i < Writes / 10; i++)
+                {
+                    structured.Append(i == 0 ? "1" : ",1");
+                    generative.AppendProps(i == 0 ? "1" : ",1");
+                }
+
+                structured.Append("]");
+                generative.AppendProps("]}");
+                structured.Complete();
+                generative.Complete();
+            },
+            () =>
+            {
+                _ = structured.Value;
+                _ = structured.RawJson;
+                _ = generative.Props;
+                _ = generative.RawProps;
+            });
+
+        Assert.Equal(Writes / 10, structured.Value!.Value.GetArrayLength());
+        Assert.Equal(Writes / 10, generative.Props!.Value.GetProperty("items").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task ArtifactContentAndHistoryCanBeReadWhileItIsRevised()
+    {
+        var artifact = new Artifact("a1", ArtifactKind.Document, "Notes");
+
+        await RaceAsync(
+            () =>
+            {
+                for (var revision = 0; revision < 50; revision++)
+                {
+                    for (var i = 0; i < 200; i++) artifact.Append("line\n");
+                    artifact.Complete();
+                    artifact.BeginRevision();
+                }
+            },
+            () =>
+            {
+                _ = artifact.Content;
+                _ = artifact.Length;
+                foreach (var version in artifact.Versions) _ = version.Content;
+            });
+
+        Assert.Equal(50, artifact.Versions.Count);
+    }
+
+    [Fact]
+    public async Task MessagePartsAndCitationsCanBeEnumeratedWhileTheyAreAdded()
+    {
+        var message = new AiMessage(AiRole.Assistant);
+
+        await RaceAsync(
+            () =>
+            {
+                for (var i = 0; i < 2000; i++)
+                {
+                    message.AddPart(new TextPart($"paragraph {i}"));
+                    message.AddCitation(new Citation($"cit{i}", new CitationSource($"src{i % 50}", "Source")));
+                    message.AddAttachment(new Attachment($"att{i}", "file.txt"));
+                }
+            },
+            () =>
+            {
+                foreach (var part in message.Parts) _ = part.PartId;
+                foreach (var citation in message.Citations) _ = citation.Number;
+                foreach (var attachment in message.Attachments) _ = attachment.Name;
+                _ = message.GetText();
+                _ = message.GetSources();
+            });
+
+        Assert.Equal(2000, message.Parts.Count);
+        Assert.Equal(2000, message.Citations.Count);
+    }
+
+    [Fact]
+    public async Task ConversationMessagesCanBeEnumeratedWhileTheThreadGrows()
+    {
+        var conversation = new Conversation();
+
+        await RaceAsync(
+            () =>
+            {
+                for (var i = 0; i < 2000; i++)
+                {
+                    conversation.AddMessage(AiRole.User, $"question {i}");
+                    conversation.GetOrAddArtifact($"art{i}", ArtifactKind.Document, "Notes");
+                    conversation.GetOrAddRun($"run{i}");
+                }
+
+                conversation.TruncateAfter(conversation.Messages[999].MessageId);
+            },
+            () =>
+            {
+                foreach (var message in conversation.Messages) _ = message.MessageId;
+                foreach (var artifact in conversation.Artifacts.Values) _ = artifact.Title;
+                foreach (var run in conversation.Runs.Values) _ = run.Status;
+                _ = conversation.ToSummary();
+                _ = conversation.TotalUsage;
+            });
+
+        Assert.Equal(1000, conversation.Messages.Count);
+    }
+
+    [Fact]
+    public async Task AgentStepsCanBeEnumeratedWhileThePlanIsRevised()
+    {
+        var run = new AgentRun("run1");
+
+        await RaceAsync(
+            () =>
+            {
+                for (var i = 0; i < 2000; i++)
+                {
+                    run.SetPlan([new AgentPlanStep("a", "A"), new AgentPlanStep($"s{i}", "Step")]);
+                    run.GetOrAddStep($"extra{i}").Start();
+                }
+            },
+            () =>
+            {
+                foreach (var step in run.Steps) _ = step.Status;
+                _ = run.Progress;
+                _ = run.CurrentStep;
+            });
+
+        Assert.Equal(3, run.Steps.Count);
+    }
+
+    private static async Task RaceAsync(Action write, Action read)
+    {
+        using var done = new CancellationTokenSource();
+        var reader = Task.Run(() =>
+        {
+            while (!done.IsCancellationRequested) read();
+        });
+
+        try
+        {
+            await Task.Run(write);
+        }
+        finally
+        {
+            done.Cancel();
+        }
+
+        await reader;
+    }
 }

@@ -299,4 +299,98 @@ public sealed class ConversationStreamProcessorTests
         Assert.Equal(36, part.Value!.Value.GetProperty("age").GetInt32());
         Assert.Equal("person", part.SchemaName);
     }
+
+    [Fact]
+    public void AToolCallIsReportedReadyOnlyOnce()
+    {
+        var (_, processor) = Create();
+        var ready = 0;
+        processor.ToolCallReady += _ => ready++;
+        processor.BeginGeneration();
+
+        var arguments = JsonDocument.Parse("""{"q":"x"}""").RootElement;
+        processor.Apply(new ToolCallStartedEvent("call1", "search") { Arguments = arguments });
+        processor.Apply(new ToolCallCompletedEvent("call1", arguments));
+        processor.Apply(new ToolCallStartedEvent("call2", "search"));
+        processor.Apply(new ToolCallDeltaEvent("call2", """{"q":"y"}"""));
+        processor.Apply(new ToolCallCompletedEvent("call2"));
+        processor.Apply(new ToolCallCompletedEvent("call2"));
+
+        Assert.Equal(2, ready);
+    }
+
+    [Theory]
+    [InlineData(MessageStatus.Cancelled, AgentRunStatus.Cancelled)]
+    [InlineData(MessageStatus.Failed, AgentRunStatus.Failed)]
+    public void AnInterruptedGenerationEndsTheRunningAgentRun(MessageStatus ending, AgentRunStatus expected)
+    {
+        var (conversation, processor) = Create();
+        processor.BeginGeneration();
+
+        processor.Apply(new AgentRunStartedEvent("run1"));
+        processor.Apply(new AgentStepStartedEvent("run1", "search"));
+        processor.EndGeneration(ending);
+
+        Assert.Equal(expected, conversation.Runs["run1"].Status);
+    }
+
+    [Fact]
+    public void ARunWaitingForInputSurvivesTheEndOfTheMessage()
+    {
+        var (conversation, processor) = Create();
+        processor.BeginGeneration();
+
+        processor.Apply(new AgentRunStartedEvent("run1"));
+        processor.Apply(new AgentInputRequestedEvent("run1", "When?"));
+        processor.Apply(new MessageCompletedEvent());
+        processor.EndGeneration();
+
+        Assert.Equal(AgentRunStatus.WaitingForInput, conversation.Runs["run1"].Status);
+    }
+
+    [Fact]
+    public void PlannedStepsReportTheirProgressThroughTheRun()
+    {
+        var (conversation, processor) = Create();
+        processor.BeginGeneration();
+        processor.Apply(new AgentRunStartedEvent("run1"));
+        processor.Apply(new AgentPlanEvent("run1", [new AgentPlanStep("a", "A"), new AgentPlanStep("b", "B")]));
+
+        var run = conversation.Runs["run1"];
+        var changes = 0;
+        run.Changed += _ => changes++;
+
+        processor.Apply(new AgentStepStartedEvent("run1", "a"));
+        processor.Apply(new AgentStepCompletedEvent("run1", "a"));
+
+        Assert.True(changes >= 2, "A planned step changing must notify observers of the run.");
+        Assert.Equal(0.5, run.Progress);
+    }
+
+    [Fact]
+    public void APlanThatRepeatsAStepIdentifierDoesNotBreakTheNextRevision()
+    {
+        var (conversation, processor) = Create();
+        processor.BeginGeneration();
+
+        processor.Apply(new AgentPlanEvent("run1", [new AgentPlanStep("a", "A"), new AgentPlanStep("a", "A again")]));
+        processor.Apply(new AgentStepCompletedEvent("run1", "a"));
+        processor.Apply(new AgentPlanEvent("run1", [new AgentPlanStep("a", "A"), new AgentPlanStep("b", "B")]));
+
+        var steps = conversation.Runs["run1"].Steps;
+        Assert.Equal(["a", "b"], steps.Select(s => s.StepId));
+        Assert.Equal(AgentStepStatus.Completed, steps[0].Status);
+    }
+
+    [Fact]
+    public void AnArtifactCreatedWithContentAndThenCompletedRecordsOneVersion()
+    {
+        var (conversation, processor) = Create();
+        processor.BeginGeneration();
+
+        processor.Apply(new ArtifactCreatedEvent("art1", ArtifactKind.Document, "Notes") { Content = "body" });
+        processor.Apply(new ArtifactCompletedEvent("art1"));
+
+        Assert.Single(conversation.FindArtifact("art1")!.Versions);
+    }
 }

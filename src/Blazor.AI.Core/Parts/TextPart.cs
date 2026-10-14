@@ -15,12 +15,20 @@ namespace Blazor.AI;
 /// The assistant body is a text part by default and is rendered as Markdown unless the host turns
 /// that off. Use <see cref="MarkdownPart"/> only when the distinction has to survive serialization.
 /// </para>
+/// <para>
+/// Safe for one writer and any number of readers. Transports usually apply deltas off the
+/// renderer's synchronization context while components read <see cref="Text"/> during render, and
+/// a <see cref="StringBuilder"/> read mid-append throws, so the builder is only touched under a lock
+/// and readers are handed an immutable snapshot that is cached until the next append.
+/// </para>
 /// </remarks>
 public class TextPart : MessagePart, ITextualPart, IStreamablePart
 {
     private readonly StringBuilder _builder;
-    private string? _cachedText;
-    private bool _isStreaming;
+    private readonly object _gate = new();
+    private volatile string? _cachedText;
+    private volatile int _length;
+    private volatile bool _isStreaming;
 
     /// <summary>Creates an empty part that expects more text.</summary>
     public TextPart() : this(null, null) { }
@@ -45,6 +53,7 @@ public class TextPart : MessagePart, ITextualPart, IStreamablePart
     {
         _builder = new StringBuilder(text ?? string.Empty, 256);
         _cachedText = text;
+        _length = _builder.Length;
         _isStreaming = text is null;
     }
 
@@ -52,20 +61,27 @@ public class TextPart : MessagePart, ITextualPart, IStreamablePart
     public override string Kind => MessagePartKinds.Text;
 
     /// <summary>The text accumulated so far.</summary>
-    public string Text => _cachedText ??= _builder.ToString();
+    public string Text
+    {
+        get
+        {
+            if (_cachedText is { } cached) return cached;
+            lock (_gate) return _cachedText ??= _builder.ToString();
+        }
+    }
 
     /// <summary>How many characters have arrived, without materialising the string.</summary>
     /// <remarks>
     /// Prefer this over <c>Text.Length</c> in hot paths such as auto-scroll checks: it avoids
     /// building the string.
     /// </remarks>
-    public int Length => _builder.Length;
+    public int Length => _length;
 
     /// <inheritdoc />
     public bool IsStreaming => _isStreaming;
 
     /// <summary><see langword="true"/> when no text has arrived yet.</summary>
-    public bool IsEmpty => _builder.Length == 0;
+    public bool IsEmpty => _length == 0;
 
     /// <summary>
     /// Appends text and notifies observers.
@@ -74,8 +90,13 @@ public class TextPart : MessagePart, ITextualPart, IStreamablePart
     public void Append(string? delta)
     {
         if (string.IsNullOrEmpty(delta)) return;
-        _builder.Append(delta);
-        _cachedText = null;
+        lock (_gate)
+        {
+            _builder.Append(delta);
+            _length = _builder.Length;
+            _cachedText = null;
+        }
+
         NotifyChanged();
     }
 
@@ -86,9 +107,14 @@ public class TextPart : MessagePart, ITextualPart, IStreamablePart
     public void SetText(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
-        _builder.Clear();
-        _builder.Append(text);
-        _cachedText = text;
+        lock (_gate)
+        {
+            _builder.Clear();
+            _builder.Append(text);
+            _length = _builder.Length;
+            _cachedText = text;
+        }
+
         NotifyChanged();
     }
 
@@ -97,8 +123,12 @@ public class TextPart : MessagePart, ITextualPart, IStreamablePart
     /// </summary>
     public void Complete()
     {
-        if (!_isStreaming) return;
-        _isStreaming = false;
+        lock (_gate)
+        {
+            if (!_isStreaming) return;
+            _isStreaming = false;
+        }
+
         OnCompleted();
         NotifyChanged();
     }

@@ -122,6 +122,15 @@ public sealed class ConversationStreamProcessor
 
         message.CompleteOpenParts();
         if (message.Status is MessageStatus.Pending or MessageStatus.Streaming) message.SetStatus(status);
+
+        // A run interrupted mid-flight never receives its completion event, and would otherwise
+        // show as running for as long as the conversation is on screen.
+        if (CurrentRun is { Status: AgentRunStatus.Planning or AgentRunStatus.Running } run
+            && status is MessageStatus.Cancelled or MessageStatus.Failed)
+        {
+            run.SetStatus(status is MessageStatus.Cancelled ? AgentRunStatus.Cancelled : AgentRunStatus.Failed);
+        }
+
         message.MergeMetadata(new GenerationMetadata
         {
             CompletedAt = DateTimeOffset.UtcNow,
@@ -255,7 +264,9 @@ public sealed class ConversationStreamProcessor
 
     private void OnToolCallCompleted(ToolCallCompletedEvent evt)
     {
-        if (FindToolCall(evt.ToolCallId) is not { } part) return;
+        // A call is ready once. A repeated completion, or one following a start that already carried
+        // the arguments, would otherwise execute the tool a second time.
+        if (FindToolCall(evt.ToolCallId) is not { IsStreaming: true } part) return;
         part.CompleteArguments(evt.Arguments);
         ToolCallReady?.Invoke(part);
     }

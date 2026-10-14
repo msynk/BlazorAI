@@ -62,6 +62,7 @@ public sealed class RenderScheduler : IAsyncDisposable
     /// </summary>
     public void Request()
     {
+        CancellationToken token;
         lock (_gate)
         {
             if (_disposed) return;
@@ -73,11 +74,11 @@ public sealed class RenderScheduler : IAsyncDisposable
                 return;
             }
 
-            _scheduled = true;
-            _cts = new CancellationTokenSource();
+            // Read under the lock: once it is released, a concurrent dispose may null the source.
+            token = ScheduleLocked();
         }
 
-        _ = RunAsync(_cts.Token);
+        _ = RunAsync(token);
     }
 
     /// <summary>
@@ -92,10 +93,16 @@ public sealed class RenderScheduler : IAsyncDisposable
             if (_disposed) return;
             _cts?.Cancel();
             _scheduled = false;
-            _dirty = false;
         }
 
         await InvokeFlushAsync().ConfigureAwait(false);
+    }
+
+    private CancellationToken ScheduleLocked()
+    {
+        _scheduled = true;
+        _cts = new CancellationTokenSource();
+        return _cts.Token;
     }
 
     private async Task RunAsync(CancellationToken cancellationToken)
@@ -111,33 +118,31 @@ public sealed class RenderScheduler : IAsyncDisposable
 
         lock (_gate)
         {
+            // A flush that started after the delay elapsed supersedes this timer, and may already
+            // have scheduled the next one.
+            if (_disposed || cancellationToken.IsCancellationRequested) return;
             _scheduled = false;
-            if (_disposed) return;
         }
 
         await InvokeFlushAsync().ConfigureAwait(false);
-
-        bool again;
-        lock (_gate)
-        {
-            again = _dirty && !_disposed;
-            _dirty = false;
-            if (again)
-            {
-                _scheduled = true;
-                _cts = new CancellationTokenSource();
-            }
-        }
-
-        if (again) _ = RunAsync(_cts!.Token);
     }
 
     private async Task InvokeFlushAsync()
     {
         lock (_gate)
         {
-            if (_flushing || _disposed) return;
+            if (_disposed) return;
+
+            if (_flushing)
+            {
+                // The running flush may already have read the state this request is about, so one
+                // more pass follows it rather than the request being dropped.
+                _dirty = true;
+                return;
+            }
+
             _flushing = true;
+            _dirty = false;
         }
 
         try
@@ -147,7 +152,18 @@ public sealed class RenderScheduler : IAsyncDisposable
         }
         finally
         {
-            lock (_gate) _flushing = false;
+            CancellationToken? next = null;
+            lock (_gate)
+            {
+                _flushing = false;
+                if (_dirty && !_scheduled && !_disposed)
+                {
+                    _dirty = false;
+                    next = ScheduleLocked();
+                }
+            }
+
+            if (next is { } token) _ = RunAsync(token);
         }
     }
 

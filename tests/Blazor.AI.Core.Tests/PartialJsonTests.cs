@@ -138,4 +138,71 @@ public sealed class PartialJsonTests
         Assert.NotNull(final);
         Assert.True(final!.Value.GetProperty("done").GetBoolean());
     }
+
+    [Theory]
+    [InlineData("""{"a":"x","b":1.""")]
+    [InlineData("""{"a":"x","b":-""")]
+    [InlineData("""{"a":"x","b":1e""")]
+    [InlineData("""{"a":"x","b":1e+""")]
+    [InlineData("""{"a":"x","b":NaN""")]
+    public void AnUnfinishedNumberIsDroppedWithoutLosingTheRestOfTheDocument(string input)
+    {
+        // double.TryParse accepts "1." and "NaN", which used to be kept and made the repair invalid.
+        var value = PartialJson.TryParse(input);
+
+        Assert.NotNull(value);
+        Assert.Equal("x", value!.Value.GetProperty("a").GetString());
+        Assert.False(value.Value.TryGetProperty("b", out _));
+    }
+
+    [Fact]
+    public void AnEscapedBackslashFollowedByUIsNotMistakenForAUnicodeEscape()
+    {
+        var value = PartialJson.TryParse("""{"t":"a\\u12""");
+
+        Assert.NotNull(value);
+        Assert.Equal("a\\u12", value!.Value.GetProperty("t").GetString());
+    }
+
+    [Theory]
+    [InlineData("""{"t":"x\uD83D""")]
+    [InlineData("""{"t":"x\uD83D\uDE""")]
+    public void HalfAnEscapedSurrogatePairIsTrimmedSoTheStringStaysReadable(string input)
+    {
+        var value = PartialJson.TryParse(input);
+
+        Assert.NotNull(value);
+        Assert.Equal("x", value!.Value.GetProperty("t").GetString());
+    }
+
+    [Fact]
+    public void HalfARawSurrogatePairIsTrimmedRatherThanThrown()
+    {
+        // Kept out of InlineData: attribute strings are stored as UTF-8 and cannot hold a lone surrogate.
+        var value = PartialJson.TryParse("{\"t\":\"x\uD83D");
+
+        Assert.NotNull(value);
+        Assert.Equal("x", value!.Value.GetProperty("t").GetString());
+    }
+
+    [Fact]
+    public void TextThatCannotBeTranscodedIsReportedAsInvalidRatherThanThrown()
+    {
+        Assert.Null(PartialJson.TryParseComplete("{\"t\":\"x\uD83D\"}"));
+    }
+
+    [Fact]
+    public void GrowingEscapedEmojiNeverYieldsAnUnreadableString()
+    {
+        const string complete = """{"t":"ok 😀 \\u done"}""";
+
+        for (var length = 1; length <= complete.Length; length++)
+        {
+            if (PartialJson.TryParse(complete[..length]) is { ValueKind: JsonValueKind.Object } value
+                && value.TryGetProperty("t", out var text))
+            {
+                _ = text.GetString();
+            }
+        }
+    }
 }

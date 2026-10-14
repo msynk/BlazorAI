@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Blazor.AI.GenerativeUI;
 
@@ -35,9 +36,14 @@ public sealed record GenerativeBindResult(
 /// </remarks>
 public static class GenerativePropsBinder
 {
+    /// <remarks>
+    /// Enums are read from their names because that is what the component schema tells the model to
+    /// send; integers are still accepted.
+    /// </remarks>
     private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true,
+        Converters = { new JsonStringEnumConverter() },
     };
 
     /// <summary>
@@ -83,6 +89,12 @@ public static class GenerativePropsBinder
             }
             catch (NotSupportedException exception)
             {
+                errors.Add($"'{property.Name}' could not be read as {declared.Type.Name}: {exception.Message}");
+            }
+            catch (InvalidOperationException exception)
+            {
+                // Raised for parameter types the serializer cannot construct, such as a record whose
+                // constructor parameters do not match its properties.
                 errors.Add($"'{property.Name}' could not be read as {declared.Type.Name}: {exception.Message}");
             }
         }

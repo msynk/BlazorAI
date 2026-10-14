@@ -106,13 +106,19 @@ public sealed class GenerativeComponent
         var type = Nullable.GetUnderlyingType(property.Type) ?? property.Type;
         var node = new Dictionary<string, object?>(StringComparer.Ordinal);
 
+        // Every type must be described the way the binder reads it: a model told "object" for a date
+        // sends an object, and a model told "array" for a dictionary sends an array, and neither binds.
         node["type"] = type switch
         {
-            _ when type == typeof(string) => "string",
+            _ when type == typeof(string) || type == typeof(char) => "string",
             _ when type == typeof(bool) => "boolean",
-            _ when type == typeof(int) || type == typeof(long) || type == typeof(short) => "integer",
+            _ when type == typeof(int) || type == typeof(long) || type == typeof(short) || type == typeof(byte)
+                || type == typeof(uint) || type == typeof(ulong) || type == typeof(ushort) || type == typeof(sbyte) => "integer",
             _ when type == typeof(double) || type == typeof(float) || type == typeof(decimal) => "number",
             _ when type.IsEnum => "string",
+            _ when type == typeof(DateTime) || type == typeof(DateTimeOffset) || type == typeof(DateOnly)
+                || type == typeof(TimeOnly) || type == typeof(TimeSpan) || type == typeof(Guid) || type == typeof(Uri) => "string",
+            _ when IsDictionary(type) => "object",
             _ when typeof(System.Collections.IEnumerable).IsAssignableFrom(type) => "array",
             _ => "object",
         };
@@ -122,4 +128,12 @@ public sealed class GenerativeComponent
 
         return node;
     }
+
+    private static bool IsDictionary(Type type) =>
+        typeof(System.Collections.IDictionary).IsAssignableFrom(type)
+        || (type.IsGenericType && IsDictionaryDefinition(type.GetGenericTypeDefinition()))
+        || type.GetInterfaces().Any(i => i.IsGenericType && IsDictionaryDefinition(i.GetGenericTypeDefinition()));
+
+    private static bool IsDictionaryDefinition(Type definition) =>
+        definition == typeof(IDictionary<,>) || definition == typeof(IReadOnlyDictionary<,>);
 }
