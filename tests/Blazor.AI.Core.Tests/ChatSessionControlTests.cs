@@ -10,8 +10,10 @@ public sealed class ChatSessionControlTests
         await using var session = new ChatSession(new HangingTransport(), null, Immediate);
 
         var turn = session.SubmitAsync("go");
+        // Polls the length rather than the text: materialising the text from this thread races the
+        // turn appending to the same builder.
         await WaitFor(() => session.Conversation.Messages.Count == 2
-            && session.Conversation.Messages[1].GetText().Length > 0);
+            && session.Conversation.Messages[1].Parts is [TextPart { Length: > 0 }, ..]);
 
         session.Stop();
         await turn;
@@ -174,7 +176,7 @@ public sealed class ChatSessionControlTests
             .ToArray();
 
         start.Set();
-        await WaitFor(() => session.Conversation.Messages.Any(m => m.Role.IsAssistant));
+        await WaitFor(() => session.Conversation.Messages.Count >= 2);
         await Task.Delay(50);
         session.Stop();
 

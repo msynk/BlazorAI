@@ -16,7 +16,9 @@ namespace Blazor.AI;
 /// </remarks>
 public sealed class AgentRun
 {
-    private readonly List<AgentStep> _steps = [];
+    // Copy-on-write: the timeline enumerates the steps on the renderer's thread while the stream
+    // revises the plan on the transport's.
+    private volatile AgentStep[] _steps = [];
     private int _version;
 
     /// <summary>Creates a run.</summary>
@@ -73,7 +75,16 @@ public sealed class AgentRun
     public int CompletedStepCount => _steps.Count(s => s.Status is AgentStepStatus.Completed);
 
     /// <summary>Completion in the range 0..1, or <see langword="null"/> when there is no plan.</summary>
-    public double? Progress => _steps.Count == 0 ? null : (double)CompletedStepCount / _steps.Count;
+    public double? Progress
+    {
+        get
+        {
+            var steps = _steps;
+            return steps.Length == 0
+                ? null
+                : (double)steps.Count(s => s.Status is AgentStepStatus.Completed) / steps.Length;
+        }
+    }
 
     /// <summary>Increments on every change, for cheap render checks.</summary>
     public int Version => _version;
@@ -94,7 +105,7 @@ public sealed class AgentRun
         foreach (var step in _steps) existing.TryAdd(step.StepId, step);
 
         var placed = new HashSet<string>(StringComparer.Ordinal);
-        _steps.Clear();
+        var revised = new List<AgentStep>(steps.Count);
 
         foreach (var planned in steps)
         {
@@ -104,16 +115,17 @@ public sealed class AgentRun
             {
                 kept.Title = planned.Title;
                 kept.Detail = planned.Detail ?? kept.Detail;
-                _steps.Add(kept);
+                revised.Add(kept);
             }
             else
             {
                 var step = new AgentStep(planned.StepId, planned.Title) { Detail = planned.Detail };
                 step.Changed += OnStepChanged;
-                _steps.Add(step);
+                revised.Add(step);
             }
         }
 
+        _steps = [.. revised];
         foreach (var dropped in existing.Values) dropped.Changed -= OnStepChanged;
 
         if (Status is AgentRunStatus.Idle) Status = AgentRunStatus.Planning;
@@ -135,7 +147,7 @@ public sealed class AgentRun
 
         step = new AgentStep(stepId, title ?? stepId);
         step.Changed += OnStepChanged;
-        _steps.Add(step);
+        _steps = [.. _steps, step];
         Touch();
         return step;
     }

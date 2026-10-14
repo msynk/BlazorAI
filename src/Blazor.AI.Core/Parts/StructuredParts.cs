@@ -13,11 +13,13 @@ namespace Blazor.AI;
 /// </remarks>
 public sealed class StructuredDataPart : MessagePart, IStreamablePart
 {
+    // Only touched under _gate: deltas arrive on the transport's thread while renderers read Value.
     private readonly StringBuilder _raw = new(256);
+    private readonly object _gate = new();
     private JsonElement? _value;
     private JsonElement? _partial;
     private bool _partialStale = true;
-    private bool _isStreaming = true;
+    private volatile bool _isStreaming = true;
 
     /// <summary>Creates an empty, streaming structured part.</summary>
     /// <param name="schemaName">A name identifying the shape, used to select a renderer.</param>
@@ -47,18 +49,27 @@ public sealed class StructuredDataPart : MessagePart, IStreamablePart
     public bool IsStreaming => _isStreaming;
 
     /// <summary>The raw JSON text received so far.</summary>
-    public string RawJson => _raw.ToString();
+    public string RawJson
+    {
+        get
+        {
+            lock (_gate) return _raw.ToString();
+        }
+    }
 
     /// <summary>The parsed value once complete, otherwise a lenient parse of what has arrived.</summary>
     public JsonElement? Value
     {
         get
         {
-            if (_value is not null) return _value;
-            if (!_partialStale) return _partial;
-            _partial = PartialJson.TryParse(_raw.ToString());
-            _partialStale = false;
-            return _partial;
+            lock (_gate)
+            {
+                if (_value is not null) return _value;
+                if (!_partialStale) return _partial;
+                _partial = PartialJson.TryParse(_raw.ToString());
+                _partialStale = false;
+                return _partial;
+            }
         }
     }
 
@@ -67,8 +78,12 @@ public sealed class StructuredDataPart : MessagePart, IStreamablePart
     public void Append(string? delta)
     {
         if (string.IsNullOrEmpty(delta)) return;
-        _raw.Append(delta);
-        _partialStale = true;
+        lock (_gate)
+        {
+            _raw.Append(delta);
+            _partialStale = true;
+        }
+
         NotifyChanged();
     }
 
@@ -95,8 +110,12 @@ public sealed class StructuredDataPart : MessagePart, IStreamablePart
     /// <param name="value">The final value, or <see langword="null"/> to parse the accumulated text.</param>
     public void Complete(JsonElement? value = null)
     {
-        _value = value ?? PartialJson.TryParseComplete(_raw.ToString()) ?? Value;
-        _isStreaming = false;
+        lock (_gate)
+        {
+            _value = value ?? PartialJson.TryParseComplete(_raw.ToString()) ?? Value;
+            _isStreaming = false;
+        }
+
         NotifyChanged();
     }
 
@@ -113,11 +132,13 @@ public sealed class StructuredDataPart : MessagePart, IStreamablePart
 /// </remarks>
 public sealed class GenerativeUiPart : MessagePart, IStreamablePart
 {
+    // Only touched under _gate: props stream in on the transport's thread while the view binds them.
     private readonly StringBuilder _raw = new(256);
+    private readonly object _gate = new();
     private JsonElement? _props;
     private JsonElement? _partial;
     private bool _partialStale = true;
-    private bool _isStreaming = true;
+    private volatile bool _isStreaming = true;
 
     /// <summary>Creates a generative UI part.</summary>
     /// <param name="componentName">The registered component name.</param>
@@ -138,18 +159,27 @@ public sealed class GenerativeUiPart : MessagePart, IStreamablePart
     public bool IsStreaming => _isStreaming;
 
     /// <summary>The raw JSON property text received so far.</summary>
-    public string RawProps => _raw.ToString();
+    public string RawProps
+    {
+        get
+        {
+            lock (_gate) return _raw.ToString();
+        }
+    }
 
     /// <summary>The properties once complete, otherwise a lenient parse of what has arrived.</summary>
     public JsonElement? Props
     {
         get
         {
-            if (_props is not null) return _props;
-            if (!_partialStale) return _partial;
-            _partial = PartialJson.TryParse(_raw.ToString());
-            _partialStale = false;
-            return _partial;
+            lock (_gate)
+            {
+                if (_props is not null) return _props;
+                if (!_partialStale) return _partial;
+                _partial = PartialJson.TryParse(_raw.ToString());
+                _partialStale = false;
+                return _partial;
+            }
         }
     }
 
@@ -158,8 +188,12 @@ public sealed class GenerativeUiPart : MessagePart, IStreamablePart
     public void AppendProps(string? delta)
     {
         if (string.IsNullOrEmpty(delta)) return;
-        _raw.Append(delta);
-        _partialStale = true;
+        lock (_gate)
+        {
+            _raw.Append(delta);
+            _partialStale = true;
+        }
+
         NotifyChanged();
     }
 
@@ -167,19 +201,27 @@ public sealed class GenerativeUiPart : MessagePart, IStreamablePart
     /// <param name="props">The properties.</param>
     public void SetProps(JsonElement props)
     {
-        _props = props;
-        _raw.Clear();
-        _raw.Append(props.GetRawText());
-        _partialStale = true;
+        lock (_gate)
+        {
+            _props = props;
+            _raw.Clear();
+            _raw.Append(props.GetRawText());
+            _partialStale = true;
+        }
+
         NotifyChanged();
     }
 
     /// <summary>Marks the properties complete.</summary>
     public void Complete()
     {
-        if (!_isStreaming) return;
-        _props ??= PartialJson.TryParseComplete(_raw.ToString()) ?? Props;
-        _isStreaming = false;
+        lock (_gate)
+        {
+            if (!_isStreaming) return;
+            _props ??= PartialJson.TryParseComplete(_raw.ToString()) ?? Props;
+            _isStreaming = false;
+        }
+
         NotifyChanged();
     }
 }
