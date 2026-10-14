@@ -82,8 +82,9 @@ public sealed class BlazorAiBuilder
     /// <returns>The builder, for chaining.</returns>
     public BlazorAiBuilder UseApprovalPolicy<TPolicy>() where TPolicy : class, IToolApprovalPolicy
     {
+        // Scoped so a policy can depend on per-user services such as the current user.
         Services.RemoveAll<IToolApprovalPolicy>();
-        Services.AddSingleton<IToolApprovalPolicy, TPolicy>();
+        Services.AddScoped<IToolApprovalPolicy, TPolicy>();
         return this;
     }
 

@@ -117,6 +117,9 @@ public sealed class Artifact : IArtifact
     /// <param name="summary">A short description of what changed.</param>
     public void Complete(string? summary = null)
     {
+        // Completing a finished revision again, for example a created event that carried the content
+        // followed by a completed event, must not record the same version twice.
+        if (!IsStreaming) return;
         IsStreaming = false;
         _versions.Add(new ArtifactVersion(Version, Content, DateTimeOffset.UtcNow, summary));
         Touch();

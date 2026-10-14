@@ -168,4 +168,61 @@ public sealed class GenerativeUiTests
         Assert.Equal("weather_card",
             variants[0].GetProperty("properties").GetProperty("component").GetProperty("const").GetString());
     }
+
+    public enum Severity { Info, Warning }
+
+    public sealed class Unconstructible(int code)
+    {
+        public int Value { get; } = code;
+    }
+
+    private sealed class AlertCard : ComponentBase
+    {
+        [Parameter] public Severity Level { get; set; }
+        [Parameter] public DateTimeOffset When { get; set; }
+        [Parameter] public Guid Id { get; set; }
+        [Parameter] public byte Priority { get; set; }
+        [Parameter] public Dictionary<string, string>? Labels { get; set; }
+        [Parameter] public List<string>? Tags { get; set; }
+        [Parameter] public Unconstructible? Broken { get; set; }
+    }
+
+    [Fact]
+    public void EnumPropertiesBindFromTheNamesTheSchemaAdvertises()
+    {
+        var component = new GenerativeUiRegistry().Register<AlertCard>("alert");
+        Assert.Equal("string", component.Schema.GetProperty("properties").GetProperty("Level").GetProperty("type").GetString());
+
+        var result = GenerativePropsBinder.Bind(component, JsonDocument.Parse("""{"level":"Warning"}""").RootElement);
+
+        Assert.True(result.IsComplete, string.Join("; ", result.Errors));
+        Assert.Equal(Severity.Warning, result.Parameters["Level"]);
+    }
+
+    [Theory]
+    [InlineData("When", "string")]
+    [InlineData("Id", "string")]
+    [InlineData("Priority", "integer")]
+    [InlineData("Labels", "object")]
+    [InlineData("Tags", "array")]
+    public void TheSchemaDescribesEachTypeTheWayTheBinderReadsIt(string property, string expected)
+    {
+        var component = new GenerativeUiRegistry().Register<AlertCard>("alert");
+
+        var type = component.Schema.GetProperty("properties").GetProperty(property).GetProperty("type").GetString();
+
+        Assert.Equal(expected, type);
+    }
+
+    [Fact]
+    public void AParameterTypeTheSerializerCannotBuildIsReportedNotThrown()
+    {
+        var component = new GenerativeUiRegistry().Register<AlertCard>("alert");
+
+        var result = GenerativePropsBinder.Bind(component,
+            JsonDocument.Parse("""{"broken":{"value":1},"level":"Info"}""").RootElement);
+
+        Assert.Contains(result.Errors, e => e.Contains("broken", StringComparison.Ordinal));
+        Assert.Equal(Severity.Info, result.Parameters["Level"]);
+    }
 }

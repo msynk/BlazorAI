@@ -134,6 +134,200 @@ public sealed class ChatSessionControlTests
             p => p is ErrorPart { Error.Code: "tool_loop_limit" });
     }
 
+    [Fact]
+    public async Task ATimeoutIsReportedAsATimeoutRatherThanAsTheUserStopping()
+    {
+        await using var session = new ChatSession(new HangingTransport(), null,
+            new ChatSessionOptions { Pacing = null, Timeout = TimeSpan.FromMilliseconds(50) });
+
+        await session.SubmitAsync("go");
+
+        Assert.Equal(AiErrorKind.Timeout, session.LastError!.Kind);
+        Assert.True(session.LastError.IsRetryable);
+        Assert.Equal(MessageStatus.Failed, session.Conversation.Messages[1].Status);
+    }
+
+    [Fact]
+    public async Task ATurnSubmittedAfterDisposalDoesNothing()
+    {
+        var transport = new FakeTransport(new MessageCompletedEvent());
+        var session = new ChatSession(transport, null, Immediate);
+        await session.DisposeAsync();
+
+        Assert.Null(await session.SubmitAsync("go"));
+        Assert.Empty(transport.Requests);
+        Assert.Empty(session.Conversation.Messages);
+    }
+
+    [Fact]
+    public async Task ConcurrentSubmissionsStartExactlyOneTurn()
+    {
+        await using var session = new ChatSession(new HangingTransport(), null, Immediate);
+        using var start = new ManualResetEventSlim();
+
+        var submissions = Enumerable.Range(0, 8)
+            .Select(i => Task.Run(async () =>
+            {
+                start.Wait();
+                return await session.SubmitAsync($"message {i}");
+            }))
+            .ToArray();
+
+        start.Set();
+        await WaitFor(() => session.Conversation.Messages.Any(m => m.Role.IsAssistant));
+        await Task.Delay(50);
+        session.Stop();
+
+        var results = await Task.WhenAll(submissions);
+        Assert.Single(results, r => r is not null);
+        Assert.Single(session.Conversation.Messages, m => m.Role.IsUser);
+    }
+
+    [Fact]
+    public async Task RegeneratingFromAUserMessageDoesNotDeleteTheQuestion()
+    {
+        var transport = new FakeTransport(_ => [new TextDeltaEvent("reply"), new MessageCompletedEvent()]);
+        await using var session = new ChatSession(transport, null, Immediate);
+        await session.SubmitAsync("question");
+
+        var result = await session.RegenerateAsync(session.Conversation.Messages[0].MessageId);
+
+        Assert.Null(result);
+        Assert.Equal(2, session.Conversation.Messages.Count);
+        Assert.Single(transport.Requests);
+    }
+
+    [Fact]
+    public async Task AnsweringAnAgentWhileBusyLeavesTheRunWaiting()
+    {
+        await using var session = new ChatSession(new HangingTransport(), null, Immediate);
+        var run = session.Conversation.GetOrAddRun("run1");
+        run.RequestInput("When should I take the downtime?");
+
+        var turn = session.SubmitAsync("first");
+        await WaitFor(() => session.Conversation.Messages.Count == 2);
+
+        Assert.Null(await session.RespondToAgentAsync("run1", "Tonight"));
+        Assert.Equal(AgentRunStatus.WaitingForInput, run.Status);
+
+        session.Stop();
+        await turn;
+    }
+
+    [Fact]
+    public async Task ALateApprovalDoesNotReviveACancelledCall()
+    {
+        var registry = new ToolRegistry();
+        registry.Register(AiTool.Create(
+            new AiToolDefinition("delete_all") { Risk = ToolRisk.Destructive },
+            (_, _) => ValueTask.FromResult(ToolOutcome.FromText("deleted"))));
+
+        var transport = new FakeTransport(_ =>
+        [
+            new ToolCallStartedEvent("c1", "delete_all") { Arguments = System.Text.Json.JsonDocument.Parse("{}").RootElement },
+            new MessageCompletedEvent(),
+        ]);
+
+        await using var session = new ChatSession(transport, null, Immediate, registry);
+        ToolCallPart? awaiting = null;
+        session.ApprovalRequested += call => awaiting = call;
+
+        var turn = session.SubmitAsync("clean up");
+        await WaitFor(() => awaiting is not null);
+        session.Stop();
+        await turn;
+
+        session.Approve("c1", ApprovalDecision.Approved);
+
+        Assert.Equal(ToolCallStatus.Cancelled, awaiting!.Status);
+        Assert.Equal(ApprovalDecision.Undecided, awaiting.Approval);
+    }
+
+    [Fact]
+    public async Task AToolThatCancelsItselfFailsTheCallNotTheTurn()
+    {
+        var registry = new ToolRegistry();
+        registry.Register(AiTool.Create(
+            new AiToolDefinition("fetch"),
+            (_, _) => throw new TaskCanceledException("The HTTP request timed out.")));
+
+        var round = 0;
+        var transport = new FakeTransport(_ => round++ == 0
+            ?
+            [
+                new ToolCallStartedEvent("c1", "fetch") { Arguments = System.Text.Json.JsonDocument.Parse("{}").RootElement },
+                new MessageCompletedEvent(FinishReason.ToolCalls),
+            ]
+            : [new TextDeltaEvent("The fetch failed."), new MessageCompletedEvent()]);
+
+        await using var session = new ChatSession(transport, null, Immediate, registry);
+        var assistant = await session.SubmitAsync("go");
+
+        var call = Assert.IsType<ToolCallPart>(assistant!.Parts[0]);
+        Assert.Equal(ToolCallStatus.Failed, call.Status);
+        Assert.Equal(MessageStatus.Complete, assistant.Status);
+        Assert.Equal(2, transport.Requests.Count);
+    }
+
+    [Fact]
+    public async Task AToolIsExecutedOnceEvenWhenItsCompletionIsRepeated()
+    {
+        var executions = 0;
+        var registry = new ToolRegistry();
+        registry.Register(AiTool.Create(
+            new AiToolDefinition("send_email"),
+            (_, _) =>
+            {
+                Interlocked.Increment(ref executions);
+                return ValueTask.FromResult(ToolOutcome.FromText("sent"));
+            }));
+
+        var arguments = System.Text.Json.JsonDocument.Parse("{}").RootElement;
+        var round = 0;
+        var transport = new FakeTransport(_ => round++ == 0
+            ?
+            [
+                new ToolCallStartedEvent("c1", "send_email") { Arguments = arguments },
+                new ToolCallCompletedEvent("c1", arguments),
+                new MessageCompletedEvent(FinishReason.ToolCalls),
+            ]
+            : [new MessageCompletedEvent()]);
+
+        await using var session = new ChatSession(transport, null, Immediate, registry);
+        await session.SubmitAsync("go");
+
+        Assert.Equal(1, executions);
+    }
+
+    [Fact]
+    public async Task AToolTheServerAlreadyAnsweredIsNotExecutedAgain()
+    {
+        var executions = 0;
+        var registry = new ToolRegistry();
+        registry.Register(AiTool.Create(
+            new AiToolDefinition("search"),
+            (_, _) =>
+            {
+                executions++;
+                return ValueTask.FromResult(ToolOutcome.FromText("client"));
+            }));
+
+        var transport = new FakeTransport(_ =>
+        [
+            new ToolCallStartedEvent("c1", "search") { Arguments = System.Text.Json.JsonDocument.Parse("{}").RootElement },
+            new ToolResultEvent("c1", ToolOutcome.FromText("server")),
+            new TextDeltaEvent("Found it."),
+            new MessageCompletedEvent(),
+        ]);
+
+        await using var session = new ChatSession(transport, null, Immediate, registry);
+        var assistant = await session.SubmitAsync("go");
+
+        Assert.Equal(0, executions);
+        Assert.Single(transport.Requests);
+        Assert.Equal("server", assistant!.FindToolCall("c1")!.Result!.Text);
+    }
+
     private static async Task WaitFor(Func<bool> condition, int timeoutMs = 2000)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);

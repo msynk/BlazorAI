@@ -327,7 +327,7 @@ public sealed class AiMessage : IAiMessage
     /// <inheritdoc />
     public string GetText()
     {
-        if (_parts.Count == 1 && _parts[0] is TextPart single) return single.Text;
+        if (_parts.Count == 1 && _parts[0] is TextPart single and not ReasoningPart) return single.Text;
 
         var builder = new StringBuilder();
         foreach (var part in _parts)

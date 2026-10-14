@@ -38,6 +38,11 @@ public static class PartialJson
         {
             return null;
         }
+        catch (ArgumentException)
+        {
+            // Text cut between the halves of a surrogate pair cannot be transcoded to UTF-8.
+            return null;
+        }
     }
 
     /// <summary>
@@ -170,17 +175,44 @@ public static class PartialJson
 
     private static ReadOnlySpan<char> TrimDanglingEscape(ReadOnlySpan<char> text)
     {
-        var backslashes = 0;
-        for (var i = text.Length - 1; i >= 0 && text[i] == '\\'; i--) backslashes++;
-        if (backslashes % 2 == 1) text = text[..^1];
+        if (text.Length > 0 && IsEscapeStart(text, text.Length - 1)) text = text[..^1];
 
-        var escape = text.LastIndexOf('\\');
-        if (escape >= 0 && escape + 1 < text.Length && text[escape + 1] == 'u' && text.Length - escape < 6)
+        // A \u escape still missing some of its four hex digits. Only a backslash that starts an
+        // escape counts: in "\\u12" the backslash before the u is itself escaped.
+        for (var length = 2; length <= 5 && length <= text.Length; length++)
         {
-            text = text[..escape];
+            var start = text.Length - length;
+            if (text[start + 1] == 'u' && IsEscapeStart(text, start))
+            {
+                text = text[..start];
+                break;
+            }
+        }
+
+        // A high surrogate whose low half has not arrived, escaped or raw, cannot be read as a string.
+        if (text.Length >= 6
+            && text[^5] == 'u'
+            && IsEscapeStart(text, text.Length - 6)
+            && ushort.TryParse(text[^4..], System.Globalization.NumberStyles.AllowHexSpecifier,
+                System.Globalization.CultureInfo.InvariantCulture, out var unit)
+            && char.IsHighSurrogate((char)unit))
+        {
+            text = text[..^6];
+        }
+        else if (text.Length > 0 && char.IsHighSurrogate(text[^1]))
+        {
+            text = text[..^1];
         }
 
         return text;
+    }
+
+    private static bool IsEscapeStart(ReadOnlySpan<char> text, int index)
+    {
+        if (text[index] != '\\') return false;
+        var preceding = 0;
+        for (var i = index - 1; i >= 0 && text[i] == '\\'; i--) preceding++;
+        return preceding % 2 == 0;
     }
 
     private static bool IsDelimiter(char c) =>
@@ -190,8 +222,39 @@ public static class PartialJson
     {
         if (token.IsEmpty) return false;
         if (token.SequenceEqual("true") || token.SequenceEqual("false") || token.SequenceEqual("null")) return true;
-        return double.TryParse(token, System.Globalization.NumberStyles.Float,
-            System.Globalization.CultureInfo.InvariantCulture, out _);
+        return IsJsonNumber(token);
+    }
+
+    /// <remarks>
+    /// Stricter than <see cref="double.TryParse(ReadOnlySpan{char}, out double)"/>, which accepts
+    /// <c>1.</c>, <c>NaN</c>, and <c>Infinity</c>. Keeping any of those makes the repaired document
+    /// invalid, and the whole value would disappear until the next digit arrives.
+    /// </remarks>
+    private static bool IsJsonNumber(ReadOnlySpan<char> token)
+    {
+        var i = 0;
+        if (token[i] == '-') i++;
+        if (i >= token.Length || !char.IsAsciiDigit(token[i])) return false;
+        if (token[i] == '0') i++;
+        else while (i < token.Length && char.IsAsciiDigit(token[i])) i++;
+
+        if (i < token.Length && token[i] == '.')
+        {
+            var start = ++i;
+            while (i < token.Length && char.IsAsciiDigit(token[i])) i++;
+            if (i == start) return false;
+        }
+
+        if (i < token.Length && token[i] is 'e' or 'E')
+        {
+            i++;
+            if (i < token.Length && token[i] is '+' or '-') i++;
+            var start = i;
+            while (i < token.Length && char.IsAsciiDigit(token[i])) i++;
+            if (i == start) return false;
+        }
+
+        return i == token.Length;
     }
 
     private static readonly JsonDocumentOptions DocumentOptions = new()

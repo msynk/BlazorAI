@@ -217,4 +217,13 @@ public sealed class ModelTests
 
         Assert.Equal("hi", await reader.ReadToEndAsync());
     }
+
+    [Fact]
+    public void ReasoningIsLeftOutOfTheTextEvenWhenItIsTheOnlyPart()
+    {
+        var message = new AiMessage(AiRole.Assistant);
+        message.AddPart(new ReasoningPart("private chain of thought"));
+
+        Assert.Equal(string.Empty, message.GetText());
+    }
 }

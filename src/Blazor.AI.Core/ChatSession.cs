@@ -34,6 +34,8 @@ public sealed class ChatSession : IAsyncDisposable
     private readonly ILogger _logger;
     private readonly Dictionary<string, TaskCompletionSource<ApprovalDecision>> _approvals = new(StringComparer.Ordinal);
     private CancellationTokenSource? _cts;
+    private int _turnActive;
+    private volatile bool _disposed;
 
     /// <summary>Creates a session.</summary>
     /// <param name="transport">Produces responses.</param>
@@ -74,7 +76,7 @@ public sealed class ChatSession : IAsyncDisposable
     public ConversationStreamProcessor Processor { get; }
 
     /// <summary><see langword="true"/> while a turn is in flight.</summary>
-    public bool IsGenerating { get; private set; }
+    public bool IsGenerating => Volatile.Read(ref _turnActive) != 0;
 
     /// <summary>The failure from the last turn, cleared when a new turn starts.</summary>
     public AiError? LastError { get; private set; }
@@ -99,29 +101,15 @@ public sealed class ChatSession : IAsyncDisposable
     /// <param name="attachments">Files to attach.</param>
     /// <param name="cancellationToken">Cancels the turn.</param>
     /// <returns>The assistant message, or <see langword="null"/> when a turn was already running.</returns>
-    public async Task<AiMessage?> SubmitAsync(
+    public Task<AiMessage?> SubmitAsync(
         string text,
         IReadOnlyList<Attachment>? attachments = null,
-        CancellationToken cancellationToken = default)
-    {
-        if (IsGenerating) return null;
-
-        var message = new AiMessage(AiRole.User);
-        if (!string.IsNullOrEmpty(text)) message.AddPart(new TextPart(text));
-        if (attachments is not null)
+        CancellationToken cancellationToken = default) =>
+        StartTurnAsync(() =>
         {
-            foreach (var attachment in attachments) message.AddAttachment(attachment);
-        }
-
-        Conversation.AddMessage(message);
-
-        if (Options.AutoTitle && Conversation.Title is null && !string.IsNullOrWhiteSpace(text))
-        {
-            Conversation.SetTitle(Summarize(text));
-        }
-
-        return await RunTurnAsync(null, cancellationToken).ConfigureAwait(false);
-    }
+            AppendUserMessage(text, attachments);
+            return true;
+        }, cancellationToken);
 
     /// <summary>
     /// Regenerates an assistant message, discarding it and everything after it.
@@ -131,37 +119,35 @@ public sealed class ChatSession : IAsyncDisposable
     /// </param>
     /// <param name="cancellationToken">Cancels the turn.</param>
     /// <returns>The new assistant message, or <see langword="null"/> when there was nothing to regenerate.</returns>
-    public async Task<AiMessage?> RegenerateAsync(string? messageId = null, CancellationToken cancellationToken = default)
-    {
-        if (IsGenerating) return null;
+    public Task<AiMessage?> RegenerateAsync(string? messageId = null, CancellationToken cancellationToken = default) =>
+        StartTurnAsync(() =>
+        {
+            var target = messageId is not null
+                ? Conversation.FindMessage(messageId)
+                : Conversation.Messages.LastOrDefault(m => m.Role.IsAssistant);
 
-        var target = messageId is not null
-            ? Conversation.FindMessage(messageId)
-            : Conversation.Messages.LastOrDefault(m => m.Role.IsAssistant);
+            // Truncating at a user message would delete the question rather than regenerate an answer.
+            if (target is null || !target.Role.IsAssistant) return false;
 
-        if (target is null) return null;
-
-        Conversation.TruncateAfter(target.MessageId, inclusive: true);
-        return await RunTurnAsync(null, cancellationToken).ConfigureAwait(false);
-    }
+            Conversation.TruncateAfter(target.MessageId, inclusive: true);
+            return true;
+        }, cancellationToken);
 
     /// <summary>
     /// Retries the last turn after a failure, keeping the user message in place.
     /// </summary>
     /// <param name="cancellationToken">Cancels the turn.</param>
     /// <returns>The new assistant message, or <see langword="null"/> when there is nothing to retry.</returns>
-    public async Task<AiMessage?> RetryAsync(CancellationToken cancellationToken = default)
-    {
-        if (IsGenerating) return null;
-
-        if (Conversation.LastMessage is { } last && last.Role.IsAssistant)
+    public Task<AiMessage?> RetryAsync(CancellationToken cancellationToken = default) =>
+        StartTurnAsync(() =>
         {
-            Conversation.RemoveMessage(last.MessageId);
-        }
+            if (Conversation.LastMessage is { } last && last.Role.IsAssistant)
+            {
+                Conversation.RemoveMessage(last.MessageId);
+            }
 
-        if (Conversation.LastMessage is null) return null;
-        return await RunTurnAsync(null, cancellationToken).ConfigureAwait(false);
-    }
+            return Conversation.LastMessage is not null;
+        }, cancellationToken);
 
     /// <summary>
     /// Replaces the text of a user message and regenerates everything after it.
@@ -170,30 +156,37 @@ public sealed class ChatSession : IAsyncDisposable
     /// <param name="text">The replacement text.</param>
     /// <param name="cancellationToken">Cancels the turn.</param>
     /// <returns>The new assistant message, or <see langword="null"/> when the message was not found.</returns>
-    public async Task<AiMessage?> EditAsync(string messageId, string text, CancellationToken cancellationToken = default)
-    {
-        if (IsGenerating) return null;
-
-        var message = Conversation.FindMessage(messageId);
-        if (message is null || !message.Role.IsUser) return null;
-
-        Conversation.TruncateAfter(messageId);
-        if (message.PartsOf<TextPart>().FirstOrDefault() is { } part)
+    public Task<AiMessage?> EditAsync(string messageId, string text, CancellationToken cancellationToken = default) =>
+        StartTurnAsync(() =>
         {
-            part.SetText(text);
-        }
-        else
-        {
-            message.AddPart(new TextPart(text));
-        }
+            var message = Conversation.FindMessage(messageId);
+            if (message is null || !message.Role.IsUser) return false;
 
-        return await RunTurnAsync(null, cancellationToken).ConfigureAwait(false);
-    }
+            Conversation.TruncateAfter(messageId);
+            if (message.PartsOf<TextPart>().FirstOrDefault() is { } part)
+            {
+                part.SetText(text);
+            }
+            else
+            {
+                message.AddPart(new TextPart(text));
+            }
+
+            return true;
+        }, cancellationToken);
 
     /// <summary>Stops the current turn. The partial answer is kept and marked cancelled.</summary>
     public void Stop()
     {
-        _cts?.Cancel();
+        try
+        {
+            Volatile.Read(ref _cts)?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The turn finished and released its token source between the read and the cancel.
+        }
+
         StateChanged?.Invoke();
     }
 
@@ -212,14 +205,20 @@ public sealed class ChatSession : IAsyncDisposable
             _approvals.Remove(toolCallId, out waiter);
         }
 
+        var call = FindToolCall(toolCallId);
+
+        // Without a waiter only a call a server-side policy is holding can be decided. Anything else
+        // has already run, been rejected, or been cancelled, and must not move back to pending.
+        if (waiter is null && call is not { Status: ToolCallStatus.AwaitingApproval }) return;
+
         if (decision is ApprovalDecision.ApprovedAlways
             && _approvalPolicy is DefaultToolApprovalPolicy policy
-            && FindToolCall(toolCallId) is { } call)
+            && call is not null)
         {
             policy.RememberAlwaysApproved(call.ToolName);
         }
 
-        FindToolCall(toolCallId)?.SetApproval(decision);
+        call?.SetApproval(decision);
         waiter?.TrySetResult(decision);
         StateChanged?.Invoke();
     }
@@ -231,33 +230,90 @@ public sealed class ChatSession : IAsyncDisposable
     /// <param name="answer">The user answer, appended as a user message.</param>
     /// <param name="cancellationToken">Cancels the turn.</param>
     /// <returns>The assistant message, or <see langword="null"/> when the run was not waiting.</returns>
-    public async Task<AiMessage?> RespondToAgentAsync(
+    public Task<AiMessage?> RespondToAgentAsync(
         string runId,
         string answer,
-        CancellationToken cancellationToken = default)
-    {
-        var run = Conversation.FindRun(runId);
-        if (run is null || run.Status is not AgentRunStatus.WaitingForInput) return null;
+        CancellationToken cancellationToken = default) =>
+        StartTurnAsync(() =>
+        {
+            // Checked inside the turn so a busy session leaves the run waiting rather than resolving
+            // it and then dropping the answer.
+            var run = Conversation.FindRun(runId);
+            if (run is null || run.Status is not AgentRunStatus.WaitingForInput) return false;
 
-        run.ResolveInput();
-        return await SubmitAsync(answer, null, cancellationToken).ConfigureAwait(false);
+            run.ResolveInput();
+            AppendUserMessage(answer, null);
+            return true;
+        }, cancellationToken);
+
+    /// <summary>
+    /// Claims the session for one turn, runs <paramref name="prepare"/> to set the conversation up,
+    /// and generates the reply.
+    /// </summary>
+    /// <remarks>
+    /// The claim is a compare-and-swap rather than a check of <see cref="IsGenerating"/>, so two
+    /// callers racing on different threads cannot both start a turn or both edit the thread.
+    /// </remarks>
+    private async Task<AiMessage?> StartTurnAsync(Func<bool> prepare, CancellationToken cancellationToken)
+    {
+        if (_disposed || Interlocked.CompareExchange(ref _turnActive, 1, 0) != 0) return null;
+
+        bool proceed;
+        try
+        {
+            proceed = prepare();
+        }
+        catch
+        {
+            Volatile.Write(ref _turnActive, 0);
+            throw;
+        }
+
+        if (!proceed)
+        {
+            Volatile.Write(ref _turnActive, 0);
+            return null;
+        }
+
+        return await RunTurnAsync(null, cancellationToken).ConfigureAwait(false);
+    }
+
+    private void AppendUserMessage(string text, IReadOnlyList<Attachment>? attachments)
+    {
+        var message = new AiMessage(AiRole.User);
+        if (!string.IsNullOrEmpty(text)) message.AddPart(new TextPart(text));
+        if (attachments is not null)
+        {
+            foreach (var attachment in attachments) message.AddAttachment(attachment);
+        }
+
+        Conversation.AddMessage(message);
+
+        if (Options.AutoTitle && Conversation.Title is null && !string.IsNullOrWhiteSpace(text))
+        {
+            Conversation.SetTitle(Summarize(text));
+        }
     }
 
     private async Task<AiMessage?> RunTurnAsync(AiMessage? into, CancellationToken cancellationToken)
     {
-        IsGenerating = true;
         LastError = null;
 
-        _cts?.Dispose();
-        _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        if (Options.Timeout is { } timeout) _cts.CancelAfter(timeout);
-        var token = _cts.Token;
+        // The timeout has its own source so that running out of time can be told apart from Stop.
+        var timeout = Options.Timeout is { } limit ? new CancellationTokenSource(limit) : null;
+        var cts = timeout is null
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+        Interlocked.Exchange(ref _cts, cts);
+        if (_disposed) cts.Cancel();
+        var token = cts.Token;
 
-        var assistant = Processor.BeginGeneration(into);
-        StateChanged?.Invoke();
-
+        AiMessage? assistant = null;
         try
         {
+            assistant = Processor.BeginGeneration(into);
+            StateChanged?.Invoke();
+
             for (var round = 0; round <= Options.MaxToolRoundtrips; round++)
             {
                 if (round > 0) assistant.SetStatus(MessageStatus.Streaming);
@@ -274,6 +330,10 @@ public sealed class ChatSession : IAsyncDisposable
                 {
                     Processor.ToolCallReady -= OnReady;
                 }
+
+                // A call the transport already answered ran on the server; running it again here
+                // would repeat its side effects.
+                ready.RemoveAll(call => call.Result is not null);
 
                 if (!Options.ExecuteTools || ready.Count == 0) break;
                 if (round == Options.MaxToolRoundtrips)
@@ -294,24 +354,34 @@ public sealed class ChatSession : IAsyncDisposable
         }
         catch (OperationCanceledException)
         {
-            LastError = new AiError("Generation stopped.") { Kind = AiErrorKind.Cancelled, Code = "cancelled" };
-            assistant.CompleteOpenParts();
-            assistant.SetStatus(MessageStatus.Cancelled);
-            Processor.EndGeneration(MessageStatus.Cancelled);
+            var timedOut = timeout is { IsCancellationRequested: true } && !cancellationToken.IsCancellationRequested;
+            LastError = timedOut
+                ? new AiError("The request timed out.") { Kind = AiErrorKind.Timeout, Code = "timeout", IsRetryable = true }
+                : new AiError("Generation stopped.") { Kind = AiErrorKind.Cancelled, Code = "cancelled" };
+
+            assistant?.CompleteOpenParts();
+            if (timedOut) assistant?.SetError(LastError);
+            else assistant?.SetStatus(MessageStatus.Cancelled);
+            Processor.EndGeneration(timedOut ? MessageStatus.Failed : MessageStatus.Cancelled);
         }
         catch (Exception exception) when (Options.CatchTransportExceptions)
         {
             _logger.LogError(exception, "The transport failed while generating a reply.");
             LastError = AiError.FromException(exception);
-            assistant.CompleteOpenParts();
-            assistant.SetError(LastError);
+            assistant?.CompleteOpenParts();
+            assistant?.SetError(LastError);
             Processor.EndGeneration(MessageStatus.Failed);
         }
         finally
         {
-            IsGenerating = false;
+            // The turn owns its token sources. Stop and DisposeAsync only ever cancel them.
+            Interlocked.CompareExchange(ref _cts, null, cts);
+            cts.Dispose();
+            timeout?.Dispose();
+
+            Volatile.Write(ref _turnActive, 0);
             StateChanged?.Invoke();
-            TurnCompleted?.Invoke(assistant);
+            if (assistant is not null) TurnCompleted?.Invoke(assistant);
         }
 
         return assistant;
@@ -402,7 +472,7 @@ public sealed class ChatSession : IAsyncDisposable
             var outcome = await tool.InvokeAsync(invocation, cancellationToken).ConfigureAwait(false);
             call.SetResult(outcome with { Duration = outcome.Duration ?? DateTimeOffset.UtcNow - started });
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             call.SetStatus(ToolCallStatus.Cancelled);
             throw;
@@ -453,7 +523,21 @@ public sealed class ChatSession : IAsyncDisposable
         await using var registration = cancellationToken.Register(() => waiter.TrySetCanceled(cancellationToken))
             .ConfigureAwait(false);
 
-        return await waiter.Task.ConfigureAwait(false);
+        try
+        {
+            return await waiter.Task.ConfigureAwait(false);
+        }
+        finally
+        {
+            // A cancelled wait must not stay registered, or a late Approve would revive the call.
+            lock (_approvals)
+            {
+                if (_approvals.TryGetValue(call.ToolCallId, out var current) && ReferenceEquals(current, waiter))
+                {
+                    _approvals.Remove(call.ToolCallId);
+                }
+            }
+        }
     }
 
     private ToolCallPart? FindToolCall(string toolCallId)
@@ -475,9 +559,18 @@ public sealed class ChatSession : IAsyncDisposable
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
-        _cts?.Cancel();
-        _cts?.Dispose();
-        _cts = null;
+        _disposed = true;
+
+        // The running turn owns and disposes its token source; disposing it here as well would make
+        // a concurrent Stop throw.
+        try
+        {
+            Interlocked.Exchange(ref _cts, null)?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The turn ended while this was cancelling it.
+        }
 
         lock (_approvals)
         {

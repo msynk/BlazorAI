@@ -89,12 +89,18 @@ public sealed class AgentRun
     {
         ArgumentNullException.ThrowIfNull(steps);
 
-        var existing = _steps.ToDictionary(s => s.StepId, StringComparer.Ordinal);
+        // Model-written plans can repeat an identifier; the first occurrence wins rather than throwing.
+        var existing = new Dictionary<string, AgentStep>(StringComparer.Ordinal);
+        foreach (var step in _steps) existing.TryAdd(step.StepId, step);
+
+        var placed = new HashSet<string>(StringComparer.Ordinal);
         _steps.Clear();
 
         foreach (var planned in steps)
         {
-            if (existing.TryGetValue(planned.StepId, out var kept))
+            if (!placed.Add(planned.StepId)) continue;
+
+            if (existing.Remove(planned.StepId, out var kept))
             {
                 kept.Title = planned.Title;
                 kept.Detail = planned.Detail ?? kept.Detail;
@@ -102,9 +108,13 @@ public sealed class AgentRun
             }
             else
             {
-                _steps.Add(new AgentStep(planned.StepId, planned.Title) { Detail = planned.Detail });
+                var step = new AgentStep(planned.StepId, planned.Title) { Detail = planned.Detail };
+                step.Changed += OnStepChanged;
+                _steps.Add(step);
             }
         }
+
+        foreach (var dropped in existing.Values) dropped.Changed -= OnStepChanged;
 
         if (Status is AgentRunStatus.Idle) Status = AgentRunStatus.Planning;
         Touch();
@@ -124,7 +134,7 @@ public sealed class AgentRun
         }
 
         step = new AgentStep(stepId, title ?? stepId);
-        step.Changed += _ => Touch();
+        step.Changed += OnStepChanged;
         _steps.Add(step);
         Touch();
         return step;
@@ -181,6 +191,12 @@ public sealed class AgentRun
         Error = error;
         SetStatus(error.Kind is AiErrorKind.Cancelled ? AgentRunStatus.Cancelled : AgentRunStatus.Failed);
     }
+
+    /// <remarks>
+    /// Every step, planned or started ad hoc, reports through here, because the run header shows
+    /// progress derived from step states.
+    /// </remarks>
+    private void OnStepChanged(AgentStep step) => Touch();
 
     private void Touch()
     {
