@@ -94,6 +94,7 @@ public static class BuiltInLanguages
         Keywords = Set("important", "media", "import", "keyframes", "supports", "layer", "container"),
         Constants = Set("inherit", "initial", "unset", "none", "auto", "currentColor", "transparent"),
         ColonProperties = true,
+        UrlFunctions = true,
     };
 
     /// <summary>SQL.</summary>
@@ -157,6 +158,7 @@ public static class BuiltInLanguages
             "String", "u8", "u16", "u32", "u64", "u128", "usize", "Vec", "Option", "Result", "Box"),
         Constants = Set("true", "false", "None", "Some", "Ok", "Err"),
         AnnotationPrefix = '#',
+        Lifetimes = true,
     };
 
     /// <summary>Java and Kotlin.</summary>

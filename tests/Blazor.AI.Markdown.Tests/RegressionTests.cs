@@ -214,6 +214,28 @@ public sealed class BlockRegressionTests
         var line = string.Concat(Enumerable.Repeat("1. ", 50_000)) + "x";
         Assert.NotEmpty(Parse(line).Blocks);
     }
+
+    [Theory]
+    [InlineData("- a\n* b\n+ c", 3)]
+    [InlineData("- a\n- b\n* c", 2)]
+    [InlineData("- a\n\n* b", 2)]
+    [InlineData("1. a\n2) b", 2)]
+    [InlineData("1) a\n\n2. b", 2)]
+    [InlineData("- a\n1. b", 2)]
+    public void ChangingTheBulletOrDelimiterStartsANewList(string source, int lists)
+    {
+        var document = Parse(source);
+
+        Assert.Equal(lists, document.Blocks.Count);
+        Assert.All(document.Blocks, b => Assert.False(Assert.IsType<ListBlock>(b).IsLoose));
+    }
+
+    [Fact]
+    public void AListKeepsItsItemsWhenTheBulletStaysTheSame()
+    {
+        Assert.Equal(3, Assert.IsType<ListBlock>(Assert.Single(Parse("* a\n* b\n\n* c").Blocks)).Items.Count);
+        Assert.Equal(2, Assert.IsType<ListBlock>(Assert.Single(Parse("1) a\n2) b").Blocks)).Items.Count);
+    }
 }
 
 public sealed class InlineRegressionTests
@@ -310,23 +332,131 @@ public sealed class InlineRegressionTests
         var links = string.Concat(Enumerable.Repeat("[", 30_000)) + "x" + string.Concat(Enumerable.Repeat("](u)", 30_000));
         Assert.NotEmpty(Parse(links));
     }
+
+    [Theory]
+    // A link cannot contain a link, so the innermost one wins and the outer brackets are text.
+    [InlineData("[a [b](c) d](e)", "{ParagraphBlock(\"[a \"a[c](\"b\")\" d](e)\")}")]
+    // Links bind more tightly than emphasis, and code spans more tightly than either.
+    [InlineData("*[a*](u)", "{ParagraphBlock(\"*\"a[u](\"a*\"))}")]
+    [InlineData("[`](u)`", "{ParagraphBlock(\"[\"code[](u)])}")]
+    [InlineData("**`a**`**", "{ParagraphBlock(strong(code[a**]))}")]
+    // An image may sit inside a link, as badges do.
+    [InlineData("[![build](b.svg)](u)", "{ParagraphBlock(a[u](ImageInline))}")]
+    // Autolinks inside a link's text stay text rather than nesting an anchor in an anchor.
+    [InlineData("[see <https://x.dev>](u)", "{ParagraphBlock(a[u](\"see <https://x.dev>\"))}")]
+    [InlineData("[go to www.x.dev](u)", "{ParagraphBlock(a[u](\"go to www.x.dev\"))}")]
+    // A bare URL does not swallow the delimiters around it.
+    [InlineData("**https://x.dev**", "{ParagraphBlock(strong(a[https://x.dev](\"https://x.dev\")))}")]
+    [InlineData("_see https://x.dev/a_b_", "{ParagraphBlock(em(\"see \"a[https://x.dev/a_b](\"https://x.dev/a_b\")))}")]
+    // Strikethrough pairs runs of exactly two tildes, so a run of three is text.
+    [InlineData("~~gone~~ and ~~~kept~~~", "{ParagraphBlock(del(\"gone\")\" and ~~~kept~~~\")}")]
+    [InlineData("**a ~~b** c~~", "{ParagraphBlock(strong(\"a ~~b\")\" c~~\")}")]
+    public void InlineSpansFollowCommonMarkPrecedence(string source, string expected) =>
+        Assert.Equal(expected, Dump(source));
+
+    [Theory]
+    // What remains of an opener may still close, so it is hidden too.
+    [InlineData("***a* b", "{ParagraphBlock(em(\"a\")\" b\")}")]
+    [InlineData("a *b c", "{ParagraphBlock(\"a b c\")}")]
+    [InlineData("~~gone so far", "{ParagraphBlock(\"gone so far\")}")]
+    [InlineData("almost ~", "{ParagraphBlock(\"almost \")}")]
+    [InlineData("_a__", "{ParagraphBlock(em(\"a\"))}")]
+    // An underscore ending a word is far more likely the middle of snake_case than a delimiter.
+    [InlineData("snake_", "{ParagraphBlock(\"snake_\")}")]
+    // Delimiters inside a closed span are literal.
+    [InlineData("~~a *b~~ c", "{ParagraphBlock(del(\"a *b\")\" c\")}")]
+    [InlineData("[*a](u) *b", "{ParagraphBlock(a[u](\"*a\")\" b\")}")]
+    public void UnmatchedDelimitersAreHiddenOnlyOutsideClosedSpansWhileStreaming(string source, string expected) =>
+        Assert.Equal(expected, Dump(source, complete: false));
+
+    [Fact]
+    public void UnmatchedDelimitersAreLiteralOnceComplete()
+    {
+        Assert.Equal("{ParagraphBlock(\"**\"em(\"a\")\" b\")}", Dump("***a* b"));
+        Assert.Equal("{ParagraphBlock(\"~~gone so far\")}", Dump("~~gone so far"));
+        Assert.Equal("{ParagraphBlock(\"almost ~\")}", Dump("almost ~"));
+    }
+
+    [Theory]
+    [InlineData("\\é", "\\é")]
+    [InlineData("\\a", "\\a")]
+    [InlineData("\\1", "\\1")]
+    [InlineData("\\—", "\\—")]
+    [InlineData("\\«quote»", "\\«quote»")]
+    [InlineData("\\→", "\\→")]
+    [InlineData("\\\\", "\\")]
+    [InlineData("\\*not em\\*", "*not em*")]
+    public void OnlyAsciiPunctuationCanBeEscaped(string source, string expected) =>
+        Assert.Equal($"{{ParagraphBlock(\"{expected}\")}}", Dump(source));
+
+    [Fact]
+    public void EveryAsciiPunctuationCharacterCanBeEscaped()
+    {
+        foreach (var c in "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
+        {
+            Assert.Equal($"{{ParagraphBlock(\"{c}\")}}", Dump("\\" + c));
+        }
+    }
+
+    [Theory]
+    [InlineData("[a](u \"t\")", "u", "t")]
+    [InlineData("[a](u 't')", "u", "t")]
+    [InlineData("[a](u (t))", "u", "t")]
+    [InlineData("[a](u\n  \"t\"  )", "u", "t")]
+    [InlineData("[a](<my file.md> 't')", "my file.md", "t")]
+    [InlineData("[a](u \"say \\\"hi\\\"\")", "u", "say \"hi\"")]
+    [InlineData("[a](u 'it\\'s')", "u", "it's")]
+    [InlineData("[a](https://x.dev/it's)", "https://x.dev/it's", null)]
+    [InlineData("[a](https://en.wikipedia.org/wiki/Foo_(bar))", "https://en.wikipedia.org/wiki/Foo_(bar)", null)]
+    [InlineData("[a](Q3 summary.pdf)", "Q3 summary.pdf", null)]
+    [InlineData("[a](u\\)v)", "u)v", null)]
+    [InlineData("[a](u\\é)", "u\\é", null)]
+    [InlineData("[a]()", "", null)]
+    public void LinkDestinationsAndTitlesFollowCommonMark(string source, string url, string? title)
+    {
+        var link = Assert.IsType<LinkInline>(Assert.Single(Parse(source)));
+
+        Assert.Equal(url, link.Url);
+        Assert.Equal(title, link.Title);
+    }
+
+    [Theory]
+    [InlineData("![cat](c.png 'A cat')", "c.png", "A cat")]
+    [InlineData("![cat](c.png (A cat))", "c.png", "A cat")]
+    public void ImageTitlesFollowCommonMark(string source, string url, string title)
+    {
+        var image = Assert.IsType<ImageInline>(Assert.Single(Parse(source)));
+
+        Assert.Equal(url, image.Url);
+        Assert.Equal("cat", image.Alt);
+        Assert.Equal(title, image.Title);
+    }
+
+    [Theory]
+    [InlineData("[a](u \"t\" x)")]
+    [InlineData("[a](foo (bar) baz)")]
+    [InlineData("[a](u\n\nv)")]
+    [InlineData("[a](u (t)")]
+    [InlineData("[a](<u)")]
+    public void AMalformedLinkTailIsText(string source) =>
+        Assert.Empty(Parse(source).OfType<LinkInline>());
 }
 
 public sealed class IncrementalRegressionTests
 {
-    private static void AssertMatchesOneShotAtEveryPrefix(string source)
+    private static void AssertMatchesOneShotAtEveryPrefix(string source, MarkdownOptions? options = null)
     {
-        var parser = new IncrementalMarkdownParser();
+        var parser = new IncrementalMarkdownParser(options);
 
         for (var length = 1; length <= source.Length; length++)
         {
             var prefix = source[..length];
             Assert.True(
-                TreeDump.Of(MarkdownParser.Parse(prefix, isComplete: false)) == TreeDump.Of(parser.Parse(prefix, isComplete: false)),
+                TreeDump.Of(MarkdownParser.Parse(prefix, options, isComplete: false)) == TreeDump.Of(parser.Parse(prefix, isComplete: false)),
                 $"Mismatch at prefix {length}: {prefix}");
         }
 
-        Assert.Equal(TreeDump.Of(MarkdownParser.Parse(source)), TreeDump.Of(parser.Parse(source, isComplete: true)));
+        Assert.Equal(TreeDump.Of(MarkdownParser.Parse(source, options)), TreeDump.Of(parser.Parse(source, isComplete: true)));
     }
 
     [Theory]
@@ -335,11 +465,26 @@ public sealed class IncrementalRegressionTests
     [InlineData("```\ncode\n```  \n\nmiddle\n\n```\nmore\n\nstill code\n```\n\nend")]
     [InlineData("- a *b\n\nnext *c\n\n- d\n\n  e\n\nlast")]
     [InlineData("# Title\n\nSome **bold** text.\n\n> quote\n> more\n\n1. one\n2. two\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nFinal.")]
+    // A fence left open inside a list item ends with the item, so the column-zero fence after it
+    // opens a new block rather than closing the first.
+    [InlineData("- item\n  ```\n  code\n\ntext\n\n```\ninside\n\nstill inside\n```\n\nafter\n\nend")]
+    [InlineData("1. step\n   ```bash\n   npm i\n\nNext.\n\n```\nnot closed by the list\n\nmore\n```\n\nend")]
+    // A "$$" line in the middle of a paragraph is text, so the "$$" after it opens display math.
+    [InlineData("text\n$$ not math\n\npara\n\n$$\nreal\n\nmath\n$$\n\nafter\n\nend")]
+    [InlineData("- a\n* b\n\n+ c\n\n1. d\n2) e\n\nend")]
     public void TheDocumentMatchesAOneShotParseExactlyAtEveryPrefix(string source) =>
         AssertMatchesOneShotAtEveryPrefix(source);
 
     [Fact]
-    public void RandomDocumentsMatchAOneShotParseAtEveryPrefix()
+    public void AFenceHiddenInsideRawHtmlDoesNotConfuseTheBoundaries() =>
+        AssertMatchesOneShotAtEveryPrefix(
+            "<div>\n```\n</div>\n\ntext\n\n```\ncode\n\nmore code\n```\n\nend",
+            new MarkdownOptions { AllowRawHtml = true });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RandomDocumentsMatchAOneShotParseAtEveryPrefix(bool allowRawHtml)
     {
         string[] fragments =
         [
@@ -347,15 +492,34 @@ public sealed class IncrementalRegressionTests
             "1. one\n2. two", "10) ten", "- a\n\n  continued", "> quote\n> more", "> lazy\nline",
             "```js\nlet a;\n\nlet b;\n```", "~~~\ntilde\n\n~~~", "```inline``` text", "$$\nx\n\ny\n$$", "$$x$$",
             "Text:\n$$\nz\n$$", "| a | b |\n|---|---|\n| 1 | 2 |", "  indented", "-", "1.", "**bold", "- [x] done",
+            // Fences left open inside list items, and column-zero fences that may or may not close them.
+            "- a\n  ```\n  code", "- a\n  ```js\n  x\n\n  y", "1. step\n   ```bash\n   npm i\n\n   more", "```",
+            "```\nz\n\nw\n```", "  ```\n  indented fence\n\n  body", "- a\n  ~~~\n  t", "- a\n```\nb",
+            // "$$" lines inside paragraphs, at block starts, and inside list items.
+            "text\n$$ not math\nmore", "para\n$$ x", "$$ x", "$$", "- item\n  $$\n  m", "end $$", "$$ a\n\nb $$",
+            // Lists whose bullet or delimiter changes, and fences or math hidden inside other blocks.
+            "* star\n+ plus\n- dash", "1. one\n2) two", "- a\n\n* b", "<div>\n```\n</div>", "<p>\n$$\n</p>", "> ```\n> q",
         ];
 
+        var options = new MarkdownOptions { AllowRawHtml = allowRawHtml };
         var random = new Random(1234);
-        for (var round = 0; round < 150; round++)
+        for (var round = 0; round < 300; round++)
         {
-            var parts = Enumerable.Range(0, random.Next(2, 6)).Select(_ => fragments[random.Next(fragments.Length)]);
+            var parts = Enumerable.Range(0, random.Next(2, 7)).Select(_ => fragments[random.Next(fragments.Length)]);
             var source = string.Join(random.Next(3) == 0 ? "\n" : "\n\n", parts) + (random.Next(2) == 0 ? "\n" : string.Empty);
-            AssertMatchesOneShotAtEveryPrefix(source);
+            AssertMatchesOneShotAtEveryPrefix(source, options);
         }
+    }
+
+    [Fact]
+    public void BlocksAfterACodeBlockInsideAListStillBecomeStable()
+    {
+        const string source = "1. Install:\n   ```bash\n   npm i\n   ```\n\nFirst.\n\nSecond.\n\nThird.\n";
+        var parser = new IncrementalMarkdownParser();
+
+        for (var length = 1; length <= source.Length; length++) parser.Parse(source[..length]);
+
+        Assert.Equal(3, parser.StableBlockCount);
     }
 
     [Fact]
@@ -390,6 +554,66 @@ public sealed class HighlighterRegressionTests
 
         Assert.Contains(tokens, t => t.Kind is TokenKind.Attribute && t.Slice(code).ToString() == "[Fact");
         Assert.DoesNotContain(tokens, t => t.Kind is TokenKind.Attribute && t.Slice(code).ToString() == "[index");
+    }
+
+    [Fact]
+    public void RustLifetimesAndLabelsAreNotStrings()
+    {
+        const string code = "fn longest<'a>(x: &'a str) -> &'static str {\n    let c = 'a';\n    let n = '\\n';\n    'outer: loop { break 'outer; }\n}";
+        var tokens = SyntaxHighlighter.Highlight(code, "rust");
+        string[] Texts(TokenKind kind) => tokens.Where(t => t.Kind == kind).Select(t => t.Slice(code).ToString()).ToArray();
+
+        Assert.Equal(["'a", "'a", "'static", "'outer", "'outer"], Texts(TokenKind.Type).Where(t => t.StartsWith('\'')));
+        Assert.Equal(["'a'", "'\\n'"], Texts(TokenKind.String));
+        Assert.Contains("str", Texts(TokenKind.Type));
+        Assert.Contains("loop", Texts(TokenKind.Keyword));
+    }
+
+    [Fact]
+    public void RustAttributesAreAttributes()
+    {
+        const string code = "#![allow(dead_code)]\n#[derive(Debug, Clone)]\nstruct S;\n#[tokio::main]\nasync fn main() {}";
+        var tokens = SyntaxHighlighter.Highlight(code, "rust");
+
+        Assert.Equal(
+            ["#![allow", "#[derive", "#[tokio::main"],
+            tokens.Where(t => t.Kind is TokenKind.Attribute).Select(t => t.Slice(code).ToString()));
+        Assert.Contains(tokens, t => t.Kind is TokenKind.Type && t.Slice(code).ToString() == "Debug");
+    }
+
+    [Theory]
+    [InlineData("css", ".a { background: url(https://x.dev/a.png); color: red; }", "https://x.dev/a.png")]
+    [InlineData("css", ".a { background: URL(//cdn.x.dev/a.png) }", "//cdn.x.dev/a.png")]
+    [InlineData("scss", ".a { b: url(\"a).png\"); }", "\"a).png\"")]
+    [InlineData("css", ".a { b: url(data:image/png;base64,iVBOR//8=) }", "data:image/png;base64,iVBOR//8=")]
+    public void ACssUrlIsOneStringEvenWithSlashes(string language, string code, string argument)
+    {
+        var tokens = SyntaxHighlighter.Highlight(code, language);
+
+        Assert.DoesNotContain(tokens, t => t.Kind is TokenKind.Comment);
+        Assert.Contains(tokens, t => t.Kind is TokenKind.String && t.Slice(code).ToString() == argument);
+        Assert.Contains(tokens, t => t.Kind is TokenKind.Function && t.Slice(code).ToString().Equals("url", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ScssLineCommentsStillWorkAroundUrls()
+    {
+        const string code = "// header\n.a { background: url(https://x.dev/a.png); } // trailing\n.b { color: red; }";
+        var tokens = SyntaxHighlighter.Highlight(code, "scss");
+
+        Assert.Equal(["// header", "// trailing"], tokens.Where(t => t.Kind is TokenKind.Comment).Select(t => t.Slice(code).ToString()));
+        Assert.Contains(tokens, t => t.Kind is TokenKind.Property && t.Slice(code).ToString() == "color");
+    }
+
+    [Fact]
+    public void AnUnclosedUrlStillStreamsAsAString()
+    {
+        const string code = ".a { background: url(https://x.dev/a";
+        var tokens = SyntaxHighlighter.Highlight(code, "css");
+
+        Assert.DoesNotContain(tokens, t => t.Kind is TokenKind.Comment);
+        Assert.Equal(TokenKind.String, tokens[^1].Kind);
+        Assert.Equal(code.Length, tokens[^1].Start + tokens[^1].Length);
     }
 
     [Fact]

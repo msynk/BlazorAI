@@ -58,5 +58,22 @@ public sealed record LanguageDefinition
     public bool IgnoreCase { get; init; }
 
     /// <summary>The character that introduces an annotation or attribute, such as an at sign.</summary>
+    /// <remarks>
+    /// A bracket only counts at the start of a line, as C# attributes are written. A hash may be
+    /// followed by <c>[</c> or <c>![</c>, as Rust attributes are written.
+    /// </remarks>
     public char? AnnotationPrefix { get; init; }
+
+    /// <summary>
+    /// Whether an apostrophe before a name is a lifetime or label rather than an unterminated
+    /// character literal, as in Rust's <c>'a</c>, <c>'static</c>, and <c>'outer:</c>.
+    /// </summary>
+    /// <remarks>Lifetimes are highlighted as types. A closed literal such as <c>'a'</c> is still a string.</remarks>
+    public bool Lifetimes { get; init; }
+
+    /// <summary>
+    /// Whether <c>url(...)</c> holds a string even when unquoted, as in CSS, so that the <c>//</c>
+    /// of an address is not read as a comment.
+    /// </summary>
+    public bool UrlFunctions { get; init; }
 }

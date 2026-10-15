@@ -11,7 +11,7 @@ public enum TokenKind
     /// <summary>A language keyword.</summary>
     Keyword = 1,
 
-    /// <summary>A built-in or well-known type name.</summary>
+    /// <summary>A built-in or well-known type name, or a lifetime such as Rust's <c>'a</c>.</summary>
     Type = 2,
 
     /// <summary>A string literal, including interpolated ones.</summary>
