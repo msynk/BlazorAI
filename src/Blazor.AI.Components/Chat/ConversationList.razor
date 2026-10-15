@@ -6,7 +6,7 @@
     today, yesterday, this week, then by month.
 *@
 
-<nav class="bai-conversations @Class" aria-label="Conversations">
+<nav class="bai-conversations @Class" aria-label="@Strings.Conversations">
     @if (ShowNewButton)
     {
         <button type="button" class="bai-conversation" @onclick="OnNew">
@@ -80,16 +80,16 @@
             .GroupBy(c => Bucket(now, c.UpdatedAt));
     }
 
-    private static string Bucket(DateTimeOffset now, DateTimeOffset updated)
+    private string Bucket(DateTimeOffset now, DateTimeOffset updated)
     {
         var age = now.Date - updated.LocalDateTime.Date;
         return age.TotalDays switch
         {
-            < 1 => "Today",
-            < 2 => "Yesterday",
-            < 7 => "Previous 7 days",
-            < 30 => "Previous 30 days",
-            _ => updated.LocalDateTime.ToString("MMMM yyyy"),
+            < 1 => Strings.Today,
+            < 2 => Strings.Yesterday,
+            < 7 => Strings.PreviousSevenDays,
+            < 30 => Strings.PreviousThirtyDays,
+            _ => Strings.MonthGroup(updated.LocalDateTime),
         };
     }
 }

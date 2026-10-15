@@ -44,7 +44,7 @@
                     @onchange="OnVersionChanged">
                 @foreach (var version in versions)
                 {
-                    <option value="@version">@($"{Strings.Version} {version}")</option>
+                    <option value="@version">@Strings.VersionNumber(version)</option>
                 }
             </select>
         }
@@ -73,7 +73,7 @@
     <div class="bai-artifact__body">
         @if (Renderers.FindArtifact(Artifact.Kind) is { } renderer)
         {
-            <RendererBoundary Label="@($"The renderer for '{Artifact.Kind}' failed")">
+            <RendererBoundary Label="@Strings.RendererFailed(Artifact.Kind.ToString())">
                 @renderer(new ArtifactContext(Artifact, _expanded))
             </RendererBoundary>
         }

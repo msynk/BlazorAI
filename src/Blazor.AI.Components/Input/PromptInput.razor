@@ -29,6 +29,27 @@
         </div>
     }
 
+    @if (_rejections.Count > 0)
+    {
+        @* A dropped file is never dropped silently: say which file was turned away and why. *@
+        <div class="bai-composer__notice" role="alert">
+            <AiIcon Name="alert" />
+            <div class="bai-composer__notice-text">
+                @foreach (var rejection in _rejections)
+                {
+                    <div>@RejectionMessage(rejection)</div>
+                }
+            </div>
+            <button type="button"
+                    class="bai-btn bai-btn--icon"
+                    title="@Strings.Dismiss"
+                    aria-label="@Strings.Dismiss"
+                    @onclick="DismissRejections">
+                <AiIcon Name="close" />
+            </button>
+        </div>
+    }
+
     @if (_menuItems.Count > 0)
     {
         <div class="bai-menu bai-menu--above" role="listbox" id="@_menuId">
@@ -129,16 +150,26 @@
 </div>
 
 @code {
+    /// <summary>The default for <see cref="MaxAttachmentSize"/>: 10 MB.</summary>
+    public const long DefaultMaxAttachmentSize = 10 * 1024 * 1024;
+
+    // Enough to explain a multi-file drop without the notice outgrowing the composer.
+    private const int MaxNotices = 3;
+
     private readonly List<Attachment> _attachments = [];
+    private readonly List<AttachmentRejection> _rejections = [];
     private readonly List<MenuEntry> _menuItems = [];
     private readonly string _menuId = $"bai-menu-{Guid.NewGuid():N}";
     private ElementReference _root;
     private ElementReference _textarea;
     private DotNetObjectReference<PromptInput>? _self;
+    private long? _registeredMaxSize;
+    private int? _pendingCaret;
     private bool _dragging;
     private int _menuIndex;
     private char _menuTrigger;
     private int _menuStart = -1;
+    private int _menuEnd = -1;
 
     /// <summary>The composer text.</summary>
     [Parameter]
@@ -182,13 +213,28 @@
     [Parameter]
     public bool AllowDictation { get; set; }
 
-    /// <summary>The accept attribute for the file picker.</summary>
+    /// <summary>
+    /// The file types to accept, in the syntax of the HTML <c>accept</c> attribute: extensions such
+    /// as <c>.pdf</c>, MIME types such as <c>image/png</c>, or wildcards such as <c>image/*</c>.
+    /// </summary>
+    /// <remarks>
+    /// Applied to the file picker and also checked for pasted and dropped files, which the browser
+    /// does not filter. Every type is accepted when unset.
+    /// </remarks>
     [Parameter]
     public string? Accept { get; set; }
 
-    /// <summary>The largest file the composer will stage, in bytes.</summary>
+    /// <summary>
+    /// The largest file the composer will stage, in bytes. Defaults to
+    /// <see cref="DefaultMaxAttachmentSize"/>.
+    /// </summary>
+    /// <remarks>
+    /// Checked in the browser before a pasted or dropped file is read, so an oversized file costs
+    /// nothing to turn away. Files within the limit are streamed rather than sent in one message, so
+    /// the limit is not tied to the SignalR message size on Blazor Server.
+    /// </remarks>
     [Parameter]
-    public long MaxAttachmentSize { get; set; } = 10 * 1024 * 1024;
+    public long MaxAttachmentSize { get; set; } = DefaultMaxAttachmentSize;
 
     /// <summary>Commands offered when the user types a forward slash.</summary>
     [Parameter]
@@ -210,9 +256,15 @@
     [Parameter]
     public RenderFragment? Hint { get; set; }
 
-    /// <summary>Raised when a file is rejected for being too large.</summary>
+    /// <summary>
+    /// Raised for each file the composer turns away: too large, not an accepted type, or unreadable.
+    /// </summary>
+    /// <remarks>
+    /// The composer already tells the user with an inline message. Handle this to log the rejection
+    /// or to offer another route, such as uploading the file to the application's own storage.
+    /// </remarks>
     [Parameter]
-    public EventCallback<string> OnAttachmentRejected { get; set; }
+    public EventCallback<AttachmentRejection> OnAttachmentRejected { get; set; }
 
     /// <summary>The attachments currently staged.</summary>
     public IReadOnlyList<Attachment> Attachments => _attachments;
@@ -229,11 +281,19 @@
     /// <inheritdoc />
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender && AllowAttachments)
+        // Registered again whenever the limit changes, because the browser checks it before reading.
+        if (AllowAttachments && _registeredMaxSize != MaxAttachmentSize)
         {
-            _self = DotNetObjectReference.Create(this);
-            await Interop.InvokeVoidAsync("registerPaste", _textarea, _self);
-            await Interop.InvokeVoidAsync("registerDrop", _root, _self);
+            _self ??= DotNetObjectReference.Create(this);
+            _registeredMaxSize = MaxAttachmentSize;
+            await Interop.InvokeVoidAsync("registerPaste", _textarea, _self, MaxAttachmentSize);
+            await Interop.InvokeVoidAsync("registerDrop", _root, _self, MaxAttachmentSize);
+        }
+        else if (!AllowAttachments && _registeredMaxSize is not null)
+        {
+            _registeredMaxSize = null;
+            await Interop.InvokeVoidAsync("unregisterPaste", _textarea);
+            await Interop.InvokeVoidAsync("unregisterDrop", _root);
         }
 
         if (firstRender)
@@ -242,13 +302,20 @@
         }
 
         await Interop.InvokeVoidAsync("autoResize", _textarea, Options.MaxComposerRows);
+
+        // Set after the render that wrote the new text, which otherwise leaves the caret at the end.
+        if (_pendingCaret is { } caret)
+        {
+            _pendingCaret = null;
+            await Interop.InvokeVoidAsync("setCaret", _textarea, caret);
+        }
     }
 
     private async Task OnInputAsync(ChangeEventArgs args)
     {
         Value = args.Value?.ToString() ?? string.Empty;
         await ValueChanged.InvokeAsync(Value);
-        UpdateMenu();
+        await UpdateMenuAsync();
     }
 
     private async Task OnKeyDownAsync(KeyboardEventArgs args)
@@ -290,6 +357,7 @@
 
         Value = string.Empty;
         _attachments.Clear();
+        _rejections.Clear();
         CloseMenu();
 
         await ValueChanged.InvokeAsync(Value);
@@ -316,40 +384,62 @@
 
     private async Task OnFilesSelectedAsync(InputFileChangeEventArgs args)
     {
-        foreach (var file in args.GetMultipleFiles(20))
+        // Every selected file is considered: GetMultipleFiles throws when asked for fewer than were
+        // picked, which would lose the whole selection.
+        foreach (var file in args.GetMultipleFiles(Math.Max(1, args.FileCount)))
         {
-            if (file.Size > MaxAttachmentSize)
+            if (Check(file.Name, file.ContentType, file.Size) is { } reason)
             {
-                await OnAttachmentRejected.InvokeAsync(file.Name);
+                await RejectAsync(file.Name, file.ContentType, file.Size, reason);
                 continue;
             }
 
-            await using var stream = file.OpenReadStream(MaxAttachmentSize);
-            using var buffer = new MemoryStream();
-            await stream.CopyToAsync(buffer);
-            var bytes = buffer.ToArray();
-
-            _attachments.Add(new Attachment(AiId.New("att"), file.Name)
+            try
             {
-                ContentType = file.ContentType,
-                Size = file.Size,
-                Kind = Attachment.InferKind(file.ContentType, file.Name),
-                Data = bytes,
-                Url = $"data:{file.ContentType};base64,{Convert.ToBase64String(bytes)}",
-            });
+                // InputFile streams in chunks, so this is bounded by the limit and not by the circuit's
+                // message size.
+                await using var stream = file.OpenReadStream(MaxAttachmentSize);
+                using var buffer = new MemoryStream((int)Math.Min(file.Size, int.MaxValue));
+                await stream.CopyToAsync(buffer);
+                _attachments.Add(ComposerFile.CreateAttachment(file.Name, file.ContentType, buffer.ToArray()));
+            }
+            catch (Exception exception) when (IsReadFailure(exception))
+            {
+                await RejectAsync(file.Name, file.ContentType, file.Size, AttachmentRejectionReason.ReadFailed);
+            }
         }
     }
 
     private void RemoveAttachment(Attachment attachment) => _attachments.Remove(attachment);
 
     /// <summary>Called from the browser when the user pastes a file into the composer.</summary>
-    /// <param name="file">The pasted file.</param>
-    /// <returns>A task that completes when the attachment has been staged.</returns>
+    /// <param name="file">
+    /// The pasted file. Its content arrives as a stream, and is withheld when the browser has already
+    /// found the file too large.
+    /// </param>
+    /// <returns>A task that completes when the file has been staged or rejected.</returns>
     [JSInvokable]
     public async Task OnPastedFile(ComposerFile file)
     {
-        if (file.Size <= MaxAttachmentSize) _attachments.Add(file.ToAttachment());
-        else await OnAttachmentRejected.InvokeAsync(file.Name);
+        ArgumentNullException.ThrowIfNull(file);
+
+        if (Check(file.Name, file.ContentType, file.Size) is { } reason)
+        {
+            await ReleaseAsync(file.Content);
+            await RejectAsync(file.Name, file.ContentType, file.Size, reason);
+        }
+        else
+        {
+            try
+            {
+                _attachments.Add(await file.ToAttachmentAsync(MaxAttachmentSize));
+            }
+            catch (Exception exception) when (IsReadFailure(exception))
+            {
+                await RejectAsync(file.Name, file.ContentType, file.Size, AttachmentRejectionReason.ReadFailed);
+            }
+        }
+
         await InvokeAsync(StateHasChanged);
     }
 
@@ -369,12 +459,87 @@
         return InvokeAsync(StateHasChanged);
     }
 
-    private void UpdateMenu()
+    private AttachmentRejectionReason? Check(string name, string contentType, long size)
+    {
+        if (!IsAccepted(name, contentType)) return AttachmentRejectionReason.TypeNotAllowed;
+        if (size > MaxAttachmentSize) return AttachmentRejectionReason.TooLarge;
+        return null;
+    }
+
+    /// <remarks>
+    /// Mirrors the browser's reading of the accept attribute, which the picker applies but a paste
+    /// or a drop does not.
+    /// </remarks>
+    private bool IsAccepted(string name, string contentType)
+    {
+        if (string.IsNullOrWhiteSpace(Accept)) return true;
+
+        foreach (var token in Accept.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            var matches = token.StartsWith('.')
+                ? name.EndsWith(token, StringComparison.OrdinalIgnoreCase)
+                : token.EndsWith("/*", StringComparison.Ordinal)
+                    ? contentType.StartsWith(token[..^1], StringComparison.OrdinalIgnoreCase)
+                    : string.Equals(token, contentType, StringComparison.OrdinalIgnoreCase);
+
+            if (matches) return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsReadFailure(Exception exception) => exception
+        is IOException or JSException or JSDisconnectedException or InvalidOperationException
+        or ArgumentException or FormatException or OperationCanceledException;
+
+    private static async Task ReleaseAsync(IJSStreamReference? content)
+    {
+        if (content is null) return;
+
+        try
+        {
+            await content.DisposeAsync();
+        }
+        catch (JSDisconnectedException) { }
+        catch (JSException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    private async Task RejectAsync(string name, string contentType, long size, AttachmentRejectionReason reason)
+    {
+        var rejection = new AttachmentRejection(name, contentType, size, reason);
+
+        _rejections.Add(rejection);
+        if (_rejections.Count > MaxNotices) _rejections.RemoveAt(0);
+
+        await OnAttachmentRejected.InvokeAsync(rejection);
+    }
+
+    private string RejectionMessage(AttachmentRejection rejection) => rejection.Reason switch
+    {
+        AttachmentRejectionReason.TooLarge => Strings.AttachmentTooLarge(rejection.FileName, MaxAttachmentSize),
+        AttachmentRejectionReason.TypeNotAllowed => Strings.AttachmentTypeNotAllowed(rejection.FileName),
+        _ => Strings.AttachmentReadFailed(rejection.FileName),
+    };
+
+    private void DismissRejections() => _rejections.Clear();
+
+    private async Task UpdateMenuAsync()
     {
         CloseMenu();
         if (Value.Length == 0) return;
+        if (Commands is not { Count: > 0 } && Mentions is not { Count: > 0 }) return;
 
-        var caret = Value.Length;
+        // The caret is only asked for when a menu could open, so ordinary typing costs no round trip.
+        // Without a browser to ask, the caret is assumed to be at the end, where typing usually is.
+        if (Value.AsSpan().IndexOfAny('/', '@') < 0) return;
+        var caret = await Interop.InvokeAsync<int?>("getCaret", _textarea) ?? Value.Length;
+
+        UpdateMenu(Math.Clamp(caret, 0, Value.Length));
+    }
+
+    private void UpdateMenu(int caret)
+    {
         var start = caret - 1;
         while (start >= 0 && !char.IsWhiteSpace(Value[start]) && Value[start] is not ('/' or '@')) start--;
         if (start < 0) return;
@@ -408,38 +573,44 @@
 
         _menuTrigger = trigger;
         _menuStart = start;
+        _menuEnd = caret;
         _menuIndex = 0;
     }
 
+    /// <remarks>
+    /// Only the trigger and the query typed after it, up to the caret, are replaced. Text after the
+    /// caret is kept, so a mention inserted into the middle of a sentence does not cut it short, and
+    /// the caret lands just after the inserted text.
+    /// </remarks>
     private async Task AcceptMenuItemAsync(int index)
     {
         if (index < 0 || index >= _menuItems.Count) return;
 
         var entry = _menuItems[index];
-        var prefix = _menuStart >= 0 ? Value[.._menuStart] : Value;
+        var start = _menuStart >= 0 ? Math.Min(_menuStart, Value.Length) : Value.Length;
+        var end = Math.Clamp(_menuEnd, start, Value.Length);
+        var prefix = Value[..start];
+        var suffix = Value[end..];
+        CloseMenu();
 
-        if (entry.Command is { } command)
+        if (entry.Command is { Handler: { } handler })
         {
-            CloseMenu();
-
-            if (command.Handler is not null)
-            {
-                Value = prefix;
-                await ValueChanged.InvokeAsync(Value);
-                await command.Handler();
-                return;
-            }
-
-            Value = prefix + (command.Template ?? $"/{command.Name} ");
-        }
-        else if (entry.Mention is { } mention)
-        {
-            CloseMenu();
-            Value = $"{prefix}@{mention.Label} ";
+            Value = prefix + suffix;
+            await ValueChanged.InvokeAsync(Value);
+            await handler();
+            return;
         }
 
+        var inserted = entry.Command is { } command
+            ? command.Template ?? $"/{command.Name} "
+            : $"@{entry.Mention!.Label} ";
+
+        // The inserted text ends in a space so typing can carry on; do not double the one that follows.
+        if (inserted.EndsWith(' ') && suffix.StartsWith(' ')) suffix = suffix[1..];
+
+        Value = prefix + inserted + suffix;
+        _pendingCaret = prefix.Length + inserted.Length;
         await ValueChanged.InvokeAsync(Value);
-        await FocusAsync();
     }
 
     private string OptionId(int index) => $"{_menuId}-{index}";
@@ -449,6 +620,7 @@
         _menuItems.Clear();
         _menuIndex = 0;
         _menuStart = -1;
+        _menuEnd = -1;
         _menuTrigger = '\0';
     }
 

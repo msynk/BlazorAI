@@ -27,7 +27,7 @@
             }
             else if (Attachment.Status is AttachmentStatus.Failed)
             {
-                <span>@(Attachment.Error ?? "Upload failed")</span>
+                <span>@(Attachment.Error ?? Strings.UploadFailed)</span>
             }
             else if (Attachment.Size is { } size)
             {

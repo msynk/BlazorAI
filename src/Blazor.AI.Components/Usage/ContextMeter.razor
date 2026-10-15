@@ -11,7 +11,7 @@
 
 @if (_window is { } window && window > 0)
 {
-    <div class="bai-usage" title="@($"{_used:N0} / {window:N0} tokens")">
+    <div class="bai-usage" title="@Strings.ContextUsage(_used, window)">
         <span>@Strings.Context</span>
         <div class="bai-meter @Severity" role="progressbar"
              aria-valuenow="@((int)(Math.Min(1, Fraction) * 100))" aria-valuemin="0" aria-valuemax="100"

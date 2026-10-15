@@ -11,7 +11,7 @@
 
 @if (_custom is not null)
 {
-    <RendererBoundary Label="@($"The renderer for '{Call.ToolName}' failed")">
+    <RendererBoundary Label="@Strings.RendererFailed(Call.ToolName)">
         @_custom
     </RendererBoundary>
 }

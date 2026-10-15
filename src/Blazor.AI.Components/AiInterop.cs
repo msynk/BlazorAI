@@ -21,9 +21,10 @@ public sealed class AiInterop : IAsyncDisposable, IDisposable
     private const string ModulePath = "./_content/Blazor.AI.Components/blazor-ai.js";
 
     private readonly IJSRuntime _js;
-    private readonly SemaphoreSlim _gate = new(1, 1);
-    private IJSObjectReference? _module;
-    private bool _unavailable;
+    private readonly Lock _sync = new();
+    private Task<IJSObjectReference?>? _loading;
+    private volatile bool _unavailable;
+    private volatile bool _disposed;
 
     /// <summary>Creates the service.</summary>
     /// <param name="js">The JavaScript runtime for the current circuit or page.</param>
@@ -38,26 +39,43 @@ public sealed class AiInterop : IAsyncDisposable, IDisposable
     /// is the case during server-side prerendering.
     /// </summary>
     /// <returns>The module reference, or <see langword="null"/>.</returns>
+    /// <remarks>
+    /// Concurrent callers share one in-flight import rather than queueing on a lock. That is what
+    /// makes disposal safe at any moment: there is no synchronisation primitive for teardown to
+    /// dispose out from under a waiter, and a load that finishes after disposal is discarded.
+    /// </remarks>
     public async ValueTask<IJSObjectReference?> GetModuleAsync()
     {
-        if (_module is not null) return _module;
-        if (_unavailable) return null;
+        if (_disposed || _unavailable) return null;
 
-        try
+        Task<IJSObjectReference?> loading;
+        lock (_sync)
         {
-            await _gate.WaitAsync().ConfigureAwait(false);
-        }
-        catch (ObjectDisposedException)
-        {
-            // The scope is being torn down; there is nothing left to call into.
-            return null;
+            if (_disposed) return null;
+            loading = _loading ??= LoadAsync();
         }
 
+        var module = await loading.ConfigureAwait(false);
+
+        if (module is null)
+        {
+            // A load that failed because the page is still prerendering, or because the call was
+            // cancelled, is worth trying again on the next call. One JavaScript refused is not,
+            // and _unavailable already says so.
+            lock (_sync)
+            {
+                if (ReferenceEquals(_loading, loading)) _loading = null;
+            }
+        }
+
+        return _disposed ? null : module;
+    }
+
+    private async Task<IJSObjectReference?> LoadAsync()
+    {
         try
         {
-            if (_module is not null) return _module;
-            _module = await _js.InvokeAsync<IJSObjectReference>("import", ModulePath).ConfigureAwait(false);
-            return _module;
+            return await _js.InvokeAsync<IJSObjectReference>("import", ModulePath).ConfigureAwait(false);
         }
         catch (JSDisconnectedException)
         {
@@ -74,13 +92,9 @@ public sealed class AiInterop : IAsyncDisposable, IDisposable
         {
             return null;
         }
-        catch (TaskCanceledException)
+        catch (OperationCanceledException)
         {
             return null;
-        }
-        finally
-        {
-            _gate.Release();
         }
     }
 
@@ -146,30 +160,38 @@ public sealed class AiInterop : IAsyncDisposable, IDisposable
     /// </remarks>
     public void Dispose()
     {
-        _module = null;
-        _gate.Dispose();
+        lock (_sync)
+        {
+            _disposed = true;
+            _loading = null;
+        }
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// A load still in flight is awaited rather than abandoned, so the module it produces is released
+    /// too. The load never throws, and callers waiting on it receive <see langword="null"/>.
+    /// </remarks>
     public async ValueTask DisposeAsync()
     {
-        if (_module is null)
+        Task<IJSObjectReference?>? loading;
+        lock (_sync)
         {
-            _gate.Dispose();
-            return;
+            _disposed = true;
+            loading = _loading;
+            _loading = null;
         }
+
+        var module = loading is null ? null : await loading.ConfigureAwait(false);
+        if (module is null) return;
 
         try
         {
-            await _module.DisposeAsync().ConfigureAwait(false);
+            await module.DisposeAsync().ConfigureAwait(false);
         }
         catch (JSDisconnectedException) { }
         catch (JSException) { }
         catch (ObjectDisposedException) { }
-        finally
-        {
-            _module = null;
-            _gate.Dispose();
-        }
+        catch (OperationCanceledException) { }
     }
 }

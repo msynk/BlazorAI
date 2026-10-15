@@ -17,13 +17,13 @@
 
     private string Label => Status switch
     {
-        AgentRunStatus.Idle => "Idle",
-        AgentRunStatus.Planning => "Planning",
-        AgentRunStatus.Running => "Running",
+        AgentRunStatus.Idle => Strings.AgentIdle,
+        AgentRunStatus.Planning => Strings.AgentPlanning,
+        AgentRunStatus.Running => Strings.AgentRunning,
         AgentRunStatus.WaitingForInput => Strings.WaitingForYou,
-        AgentRunStatus.Completed => "Done",
-        AgentRunStatus.Failed => "Failed",
-        AgentRunStatus.Cancelled => "Stopped",
+        AgentRunStatus.Completed => Strings.AgentCompleted,
+        AgentRunStatus.Failed => Strings.AgentFailed,
+        AgentRunStatus.Cancelled => Strings.AgentCancelled,
         _ => Status.ToString(),
     };
 

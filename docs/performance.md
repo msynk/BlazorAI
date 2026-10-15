@@ -93,6 +93,12 @@ bounds the loop, because a model that keeps calling tools will otherwise spend m
 | `VirtualizeThreshold` | lower, to keep diffs small | default |
 | Attachments | upload out of band, not into circuit memory | inline is fine |
 
+Pasted and dropped files are streamed from the browser in chunks rather than sent in one interop
+message, so they are bounded by `PromptInput.MaxAttachmentSize` and not by the SignalR message limit
+(32 KB by default) on Blazor Server. The size is checked in the browser before anything is read, so
+an oversized file costs nothing to refuse. A file within the limit still ends up in circuit memory
+once staged, which is why large uploads belong out of band on Server.
+
 ## Measuring
 
 `RenderScheduler` exposes `RenderCount` and `CoalescedCount`. `IncrementalMarkdownParser` exposes

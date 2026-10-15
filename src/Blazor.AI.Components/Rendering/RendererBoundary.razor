@@ -17,7 +17,7 @@
     <ErrorContent Context="exception">
         <div class="bai-chip" title="@exception.Message">
             <AiIcon Name="alert" />
-            <span>@(Label ?? "This content could not be rendered")</span>
+            <span>@(Label ?? Strings.RenderFailed)</span>
         </div>
     </ErrorContent>
 </ErrorBoundary>

@@ -57,6 +57,8 @@
                                  Session="ActiveSession"
                                  Placeholder="@Placeholder"
                                  AllowAttachments="AllowAttachments"
+                                 MaxAttachmentSize="MaxAttachmentSize"
+                                 OnAttachmentRejected="OnAttachmentRejected"
                                  AllowDictation="AllowDictation"
                                  Commands="Commands"
                                  Mentions="Mentions"
@@ -170,6 +172,14 @@
     /// <summary>Offer attachments in the composer.</summary>
     [Parameter]
     public bool AllowAttachments { get; set; } = true;
+
+    /// <summary>The largest file the composer will stage, in bytes.</summary>
+    [Parameter]
+    public long MaxAttachmentSize { get; set; } = PromptInput.DefaultMaxAttachmentSize;
+
+    /// <summary>Raised for each file the composer turns away. The user is told either way.</summary>
+    [Parameter]
+    public EventCallback<AttachmentRejection> OnAttachmentRejected { get; set; }
 
     /// <summary>Offer dictation in the composer.</summary>
     [Parameter]

@@ -36,6 +36,42 @@ public sealed class GenerativeUiRenderingTests : AiTestBase
     }
 
     [Fact]
+    public void IgnoredPropertiesAreListedApartFromErrors()
+    {
+        Generative.Register<ForecastCard>("forecast_card");
+
+        var part = new GenerativeUiPart("forecast_card");
+        part.SetProps(JsonDocument.Parse("""{"city":"Oslo","degrees":"warm","mood":"sunny"}""").RootElement);
+        part.Complete();
+
+        var view = Render<GenerativeUiView>(p => p
+            .Add(c => c.Part, part)
+            .Add(c => c.ShowBindingErrors, true));
+
+        var ignored = Assert.Single(view.FindAll(".bai-chip--muted"));
+        Assert.Equal("Ignored: mood", ignored.TextContent);
+        var error = Assert.Single(view.FindAll(".bai-chip--danger"));
+        Assert.DoesNotContain("mood", error.TextContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void IgnoredPropertiesAloneAreListedWhenBindingOtherwiseSucceeded()
+    {
+        Generative.Register<ForecastCard>("forecast_card");
+
+        var part = new GenerativeUiPart("forecast_card");
+        part.SetProps(JsonDocument.Parse("""{"city":"Oslo","degrees":12,"mood":"sunny"}""").RootElement);
+        part.Complete();
+
+        var view = Render<GenerativeUiView>(p => p
+            .Add(c => c.Part, part)
+            .Add(c => c.ShowBindingErrors, true));
+
+        Assert.Equal("Ignored: mood", Assert.Single(view.FindAll(".bai-chip--muted")).TextContent);
+        Assert.Empty(view.FindAll(".bai-chip--danger"));
+    }
+
+    [Fact]
     public void AnUnregisteredComponentNameRendersAPlaceholderRatherThanThrowing()
     {
         var part = new GenerativeUiPart("definitely_not_registered");

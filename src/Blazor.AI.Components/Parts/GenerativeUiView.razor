@@ -15,7 +15,7 @@
 {
     @if (!Part.IsStreaming)
     {
-        <div class="bai-chip" title="@($"No component named '{Part.ComponentName}' is registered.")">
+        <div class="bai-chip" title="@Strings.ComponentNotRegistered(Part.ComponentName)">
             <AiIcon Name="alert" />
             <span>@Part.ComponentName</span>
         </div>
@@ -24,17 +24,24 @@
 else
 {
     <div class="bai-generative">
-        <RendererBoundary Label="@($"'{Part.ComponentName}' could not be rendered")">
+        <RendererBoundary Label="@Strings.ComponentFailed(Part.ComponentName)">
             @RenderComponent()
         </RendererBoundary>
     </div>
 
-    @if (ShowBindingErrors && _binding is { IsComplete: false } binding && !Part.IsStreaming)
+    @if (ShowBindingErrors && _binding is { } binding && !Part.IsStreaming
+         && (binding.Errors.Count > 0 || binding.IgnoredProperties.Count > 0))
     {
+        @* Errors are values that did not bind; ignored properties are names the component does not
+           declare. They are kept apart because only the first means the card is missing something. *@
         <div class="bai-message__meta">
             @foreach (var error in binding.Errors)
             {
-                <span class="bai-chip">@error</span>
+                <span class="bai-chip bai-chip--danger">@error</span>
+            }
+            @foreach (var name in binding.IgnoredProperties)
+            {
+                <span class="bai-chip bai-chip--muted" title="@Strings.IgnoredPropertyHint">@Strings.IgnoredProperty(name)</span>
             }
         </div>
     }
@@ -50,8 +57,8 @@ else
     public GenerativeUiPart Part { get; set; } = default!;
 
     /// <summary>
-    /// Show properties that failed to bind. Useful while developing the prompt that produces them,
-    /// noise in production.
+    /// Show properties that failed to bind, and those ignored because the component does not
+    /// declare them. Useful while developing the prompt that produces them, noise in production.
     /// </summary>
     [Parameter]
     public bool ShowBindingErrors { get; set; }
