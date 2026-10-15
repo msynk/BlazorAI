@@ -49,14 +49,14 @@
     @if (!Submitted)
     {
         <div class="bai-form__actions">
-            @if (Definition.CancelLabel is { Length: > 0 } cancel)
+            @if ((Definition.CancelLabel ?? Strings.Cancel) is { Length: > 0 } cancel)
             {
                 <button type="button" class="bai-btn bai-btn--outline" disabled="@Busy" @onclick="CancelAsync">
                     @cancel
                 </button>
             }
             <button type="button" class="bai-btn bai-btn--primary" disabled="@Busy" @onclick="SubmitAsync">
-                @Definition.SubmitLabel
+                @(Definition.SubmitLabel ?? Strings.Submit)
             </button>
         </div>
     }
@@ -64,7 +64,7 @@
     {
         <div class="bai-chip" style="align-self:flex-end">
             <AiIcon Name="check" />
-            <span>Submitted</span>
+            <span>@Strings.Submitted</span>
         </div>
     }
 </div>
@@ -196,7 +196,7 @@
 
             if (field.Required && string.IsNullOrWhiteSpace(value) && field.Type is not AiFieldType.Boolean)
             {
-                _errors[field.Name] = $"{field.DisplayLabel} is required.";
+                _errors[field.Name] = Strings.FieldRequired(field.DisplayLabel);
                 continue;
             }
 
@@ -209,32 +209,32 @@
                 if (!double.TryParse(value, System.Globalization.NumberStyles.Float,
                         System.Globalization.CultureInfo.InvariantCulture, out var number))
                 {
-                    _errors[field.Name] = $"{field.DisplayLabel} must be a number.";
+                    _errors[field.Name] = Strings.FieldNotANumber(field.DisplayLabel);
                     continue;
                 }
 
                 if (field.Minimum is { } min && number < min)
                 {
-                    _errors[field.Name] = $"{field.DisplayLabel} must be at least {min}.";
+                    _errors[field.Name] = Strings.FieldBelowMinimum(field.DisplayLabel, min);
                     continue;
                 }
 
                 if (field.Maximum is { } max && number > max)
                 {
-                    _errors[field.Name] = $"{field.DisplayLabel} must be at most {max}.";
+                    _errors[field.Name] = Strings.FieldAboveMaximum(field.DisplayLabel, max);
                     continue;
                 }
             }
 
             if (field.Type is AiFieldType.Email && !value.Contains('@'))
             {
-                _errors[field.Name] = $"{field.DisplayLabel} must be an email address.";
+                _errors[field.Name] = Strings.FieldNotAnEmail(field.DisplayLabel);
                 continue;
             }
 
             if (field.Pattern is { Length: > 0 } pattern && !IsMatch(value, pattern))
             {
-                _errors[field.Name] = $"{field.DisplayLabel} is not in the expected format.";
+                _errors[field.Name] = Strings.FieldInvalidFormat(field.DisplayLabel);
             }
         }
 

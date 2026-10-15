@@ -5,7 +5,7 @@ a single component instance restyles the framework without touching its source.
 
 ```css
 :root {
-  --bai-color-accent: #7c3aed;
+  --bai-accent: #7c3aed;
   --bai-radius: 14px;
   --bai-content-width: 52rem;
   --bai-font-sans: "Inter", system-ui, sans-serif;
@@ -19,6 +19,7 @@ a single component instance restyles the framework without touching its source.
 | Surfaces | `--bai-color-bg`, `-bg-subtle`, `-bg-muted`, `-bg-inset`, `-bg-overlay` |
 | Text | `--bai-color-fg`, `-fg-muted`, `-fg-subtle`, `-fg-inverted` |
 | Lines | `--bai-color-border`, `-border-strong`, `--bai-color-focus` |
+| Brand | `--bai-accent`, `--bai-accent-dark`, `--bai-accent-fg`, `--bai-accent-fg-dark` (inputs; see below) |
 | Intent | `--bai-color-accent`, `-success`, `-warning`, `-danger`, `-info`, each with a `-subtle` pair |
 | Messages | `--bai-user-bg`, `--bai-user-fg`, `--bai-assistant-bg`, `--bai-assistant-fg` |
 | Type | `--bai-font-sans`, `-mono`, `--bai-font-size`, `-sm`, `-xs`, `-lg`, `--bai-line-height` |
@@ -50,8 +51,64 @@ In markup:
 </AiTheme>
 ```
 
-Because the dark palette redefines only the tokens, a custom accent set on `:root` survives the
-switch. Define your own colours as tokens rather than as rules and they will too.
+The dark palette redefines the palette tokens, including `--bai-color-accent`, and it does so on
+every element that chooses a scheme. A value written straight into a palette token on `:root`
+therefore does not survive the switch: the system dark rule outranks a plain `:root` rule, and a
+nested `data-bai-theme` element declares its own. Brand colours go in the brand tokens instead.
+
+## Brand accent
+
+The accent is set through input tokens that the palette reads in both schemes:
+
+| Token | Meaning | Default |
+| --- | --- | --- |
+| `--bai-accent` | The brand colour, used in both schemes. | `#2f6feb` light, `#6d9bf7` dark |
+| `--bai-accent-dark` | A different shade for the dark scheme. | `--bai-accent` |
+| `--bai-accent-fg` | Text drawn on the accent, such as the send button icon. | `#ffffff` light, `#10131a` dark |
+| `--bai-accent-fg-dark` | Text on the accent in the dark scheme. | `--bai-accent-fg` |
+
+`--bai-color-accent-hover`, `--bai-color-accent-subtle`, and `--bai-color-focus` are derived from
+the resolved accent with `color-mix()`, so one token restyles all of them: hover is the accent shaded
+toward black in light and toward white in dark, subtle is a tint of the accent over the background.
+
+```css
+:root {
+  --bai-accent: #7c3aed;       /* violet in both schemes */
+  --bai-accent-dark: #a78bfa;  /* a lighter violet reads better on a dark background */
+}
+```
+
+The same tokens scope to a region. A brand token in an inline style takes effect on that element, so
+`AiTheme` needs nothing else:
+
+```razor
+<AiTheme Style="--bai-accent:#0f766e">
+    <AiChat />
+</AiTheme>
+```
+
+This works whatever the scheme: the system preference, `Theme="AiTheme.AiThemeMode.Dark"` on the same or an
+outer `AiTheme`, or a `data-bai-theme` attribute higher up. To brand a region from a stylesheet
+instead of an inline style, add the `bai-theme` class to it, which is where the accent is worked out:
+
+```css
+.support-panel { --bai-accent: #b45309; }
+```
+
+```html
+<div class="support-panel bai-theme">...</div>
+```
+
+Pick a `--bai-accent-fg` that contrasts with your accent, and set `--bai-accent-dark` or
+`--bai-accent-fg-dark` when one colour cannot serve both backgrounds: the dark default text colour is
+near black, which suits a light accent but not a deep one.
+
+Overriding a palette token directly, `--bai-color-accent` included, still works on the element where
+you set it and everything inside it, as long as nothing in between chooses a scheme or sets a brand
+token. It does not
+change the derived hover and subtle colours, which is the reason to prefer the brand tokens.
+
+The derivation uses `color-mix()`, available in every current browser engine.
 
 ## Density
 
@@ -69,7 +126,7 @@ panel rather than a full page.
 Tokens cascade, so a region can differ from the page:
 
 ```razor
-<AiTheme Style="--bai-color-accent:#0f766e; --bai-content-width:38rem">
+<AiTheme Style="--bai-accent:#0f766e; --bai-content-width:38rem">
     <AiChat />
 </AiTheme>
 ```

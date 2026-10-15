@@ -22,8 +22,13 @@ none of which a hand-rolled listbox gets for free.
 **Keyboard.** Enter sends and Shift with Enter inserts a newline, which is what people expect from a
 chat box and the opposite of what a plain textarea does. The slash-command and mention menus are
 driven with the arrow keys, Enter, Tab, and Escape, and expose `role="listbox"` with
-`aria-selected`. Focus rings are never removed; `:focus-visible` gets a two-pixel outline in
-`--bai-color-focus`.
+`aria-selected`. Choosing an item inserts it at the caret, keeps the text after it, and leaves the
+caret just after the insertion. Focus rings are never removed; `:focus-visible` gets a two-pixel
+outline in `--bai-color-focus`.
+
+**Nothing fails silently.** A pasted, dropped, or picked file the composer cannot take, because it is
+too large, not an accepted type, or unreadable, is reported in a dismissible notice with
+`role="alert"`, so the reason is announced as well as shown.
 
 **Icons are decorative.** Every SVG is `aria-hidden` with `focusable="false"`, and every icon-only
 button carries an `aria-label`.
@@ -49,7 +54,10 @@ registered component that renders an icon or a chart needs its own accessible na
 **A page structure around the chat.** The library renders no `h1` and does not assume where it sits.
 
 **Localisation.** `AiStrings` is English by default. Subclass it, and remember the formatters for
-durations, byte counts, and token counts as well as the labels.
+durations, byte counts, and token counts as well as the labels. It covers accessible names too (the
+transcript region, the conversation list, citation markers), along with agent status badges, form
+validation messages, conversation date groups, and the messages the composer shows when it turns a
+file away.
 
 ## Testing
 

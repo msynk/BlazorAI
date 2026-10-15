@@ -19,7 +19,7 @@
 
     @if (Error.RetryAfter is { } wait)
     {
-        <div>Try again in @Strings.FormatDuration(wait).</div>
+        <div>@Strings.RetryIn(wait)</div>
     }
 
     <div class="bai-message__meta">

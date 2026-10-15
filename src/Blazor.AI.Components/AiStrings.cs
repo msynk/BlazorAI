@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Blazor.AI.Components;
 
 /// <summary>
@@ -169,6 +171,180 @@ public class AiStrings
 
     /// <summary>Label for the context usage meter.</summary>
     public virtual string Context => "Context";
+
+    /// <summary>Tooltip on the context usage meter.</summary>
+    /// <param name="used">Tokens used so far.</param>
+    /// <param name="window">The size of the context window.</param>
+    /// <returns>The tooltip.</returns>
+    public virtual string ContextUsage(long used, long window) => $"{used:N0} / {window:N0} {Tokens}";
+
+    /// <summary>Generation speed in the token usage readout.</summary>
+    /// <param name="rate">Tokens per second.</param>
+    /// <returns>The readout.</returns>
+    public virtual string TokensPerSecond(double rate) => $"{rate:0.#} tok/s";
+
+    /// <summary>Label for prompt tokens in the usage breakdown.</summary>
+    public virtual string InputTokens => "Input";
+
+    /// <summary>Label for completion tokens in the usage breakdown.</summary>
+    public virtual string OutputTokens => "Output";
+
+    /// <summary>Label for cached prompt tokens in the usage breakdown.</summary>
+    public virtual string CachedTokens => "Cached";
+
+    /// <summary>Label for reasoning tokens in the usage breakdown.</summary>
+    public virtual string ReasoningTokens => "Reasoning";
+
+    /// <summary>One line of the usage breakdown.</summary>
+    /// <param name="label">What is being counted, such as <see cref="InputTokens"/>.</param>
+    /// <param name="tokens">The count.</param>
+    /// <returns>The line.</returns>
+    public virtual string UsageLine(string label, long tokens) => $"{label}: {tokens:N0}";
+
+    /// <summary>Accessible name of the transcript region.</summary>
+    public virtual string Transcript => "Conversation";
+
+    /// <summary>Accessible name of the conversation list.</summary>
+    public virtual string Conversations => "Conversations";
+
+    /// <summary>Group heading for conversations updated today.</summary>
+    public virtual string Today => "Today";
+
+    /// <summary>Group heading for conversations updated yesterday.</summary>
+    public virtual string Yesterday => "Yesterday";
+
+    /// <summary>Group heading for conversations updated in the last week.</summary>
+    public virtual string PreviousSevenDays => "Previous 7 days";
+
+    /// <summary>Group heading for conversations updated in the last month.</summary>
+    public virtual string PreviousThirtyDays => "Previous 30 days";
+
+    /// <summary>Group heading for older conversations, one per calendar month.</summary>
+    /// <param name="date">A local date in the month.</param>
+    /// <returns>The heading.</returns>
+    public virtual string MonthGroup(DateTime date) => date.ToString("MMMM yyyy", CultureInfo.CurrentCulture);
+
+    /// <summary>Accessible name of an inline citation marker.</summary>
+    /// <param name="number">The marker number, when the citation has one.</param>
+    /// <param name="title">The title of the cited source.</param>
+    /// <returns>The accessible name.</returns>
+    public virtual string CitationLabel(int? number, string title) =>
+        number is null ? $"Source: {title}" : $"Source {number}: {title}";
+
+    /// <summary>Label of one entry in the artifact version selector.</summary>
+    /// <param name="version">The version number.</param>
+    /// <returns>The label.</returns>
+    public virtual string VersionNumber(int version) => $"{Version} {version}";
+
+    /// <summary>Status of an agent run that has not started.</summary>
+    public virtual string AgentIdle => "Idle";
+
+    /// <summary>Status of an agent run that is working out its steps.</summary>
+    public virtual string AgentPlanning => "Planning";
+
+    /// <summary>Status of an agent run that is executing.</summary>
+    public virtual string AgentRunning => "Running";
+
+    /// <summary>Status of an agent run that finished.</summary>
+    public virtual string AgentCompleted => "Done";
+
+    /// <summary>Status of an agent run that failed.</summary>
+    public virtual string AgentFailed => "Failed";
+
+    /// <summary>Status of an agent run the user stopped.</summary>
+    public virtual string AgentCancelled => "Stopped";
+
+    /// <summary>Default label on a form's submit button.</summary>
+    public virtual string Submit => "Submit";
+
+    /// <summary>Shown in place of a form's actions once it has been submitted.</summary>
+    public virtual string Submitted => "Submitted";
+
+    /// <summary>Validation message for a required field left empty.</summary>
+    /// <param name="label">The field label.</param>
+    /// <returns>The message.</returns>
+    public virtual string FieldRequired(string label) => $"{label} is required.";
+
+    /// <summary>Validation message for a numeric field that does not hold a number.</summary>
+    /// <param name="label">The field label.</param>
+    /// <returns>The message.</returns>
+    public virtual string FieldNotANumber(string label) => $"{label} must be a number.";
+
+    /// <summary>Validation message for a number below the minimum.</summary>
+    /// <param name="label">The field label.</param>
+    /// <param name="minimum">The smallest accepted value.</param>
+    /// <returns>The message.</returns>
+    public virtual string FieldBelowMinimum(string label, double minimum) => $"{label} must be at least {minimum}.";
+
+    /// <summary>Validation message for a number above the maximum.</summary>
+    /// <param name="label">The field label.</param>
+    /// <param name="maximum">The largest accepted value.</param>
+    /// <returns>The message.</returns>
+    public virtual string FieldAboveMaximum(string label, double maximum) => $"{label} must be at most {maximum}.";
+
+    /// <summary>Validation message for an email field that does not hold an address.</summary>
+    /// <param name="label">The field label.</param>
+    /// <returns>The message.</returns>
+    public virtual string FieldNotAnEmail(string label) => $"{label} must be an email address.";
+
+    /// <summary>Validation message for a value that does not match the field pattern.</summary>
+    /// <param name="label">The field label.</param>
+    /// <returns>The message.</returns>
+    public virtual string FieldInvalidFormat(string label) => $"{label} is not in the expected format.";
+
+    /// <summary>Shown on an attachment whose upload failed without a reason.</summary>
+    public virtual string UploadFailed => "Upload failed";
+
+    /// <summary>Shown when a file is larger than the composer accepts.</summary>
+    /// <param name="fileName">The file name.</param>
+    /// <param name="maxSize">The largest accepted size, in bytes.</param>
+    /// <returns>The message.</returns>
+    public virtual string AttachmentTooLarge(string fileName, long maxSize) =>
+        $"{fileName} is too large. Files can be up to {FormatBytes(maxSize)}.";
+
+    /// <summary>Shown when a file is not one of the types the composer accepts.</summary>
+    /// <param name="fileName">The file name.</param>
+    /// <returns>The message.</returns>
+    public virtual string AttachmentTypeNotAllowed(string fileName) => $"{fileName} is not a supported file type.";
+
+    /// <summary>Shown when a file could not be read.</summary>
+    /// <param name="fileName">The file name.</param>
+    /// <returns>The message.</returns>
+    public virtual string AttachmentReadFailed(string fileName) => $"{fileName} could not be read.";
+
+    /// <summary>Label for dismissing a notice.</summary>
+    public virtual string Dismiss => "Dismiss";
+
+    /// <summary>Shown under an error that can be retried after a delay.</summary>
+    /// <param name="wait">How long to wait.</param>
+    /// <returns>The message.</returns>
+    public virtual string RetryIn(TimeSpan wait) => $"Try again in {FormatDuration(wait)}.";
+
+    /// <summary>Shown in place of content whose renderer threw.</summary>
+    public virtual string RenderFailed => "This content could not be rendered";
+
+    /// <summary>Shown in place of content whose custom renderer threw.</summary>
+    /// <param name="name">The tool, part kind, schema, or artifact kind the renderer handles.</param>
+    /// <returns>The message.</returns>
+    public virtual string RendererFailed(string name) => $"The renderer for '{name}' failed";
+
+    /// <summary>Shown in place of a generated component that threw.</summary>
+    /// <param name="component">The component name.</param>
+    /// <returns>The message.</returns>
+    public virtual string ComponentFailed(string component) => $"'{component}' could not be rendered";
+
+    /// <summary>Tooltip on a generated component the application has not registered.</summary>
+    /// <param name="component">The component name the model asked for.</param>
+    /// <returns>The tooltip.</returns>
+    public virtual string ComponentNotRegistered(string component) => $"No component named '{component}' is registered.";
+
+    /// <summary>Shown for a generated property the component does not declare, so it was not passed.</summary>
+    /// <param name="name">The property name.</param>
+    /// <returns>The label.</returns>
+    public virtual string IgnoredProperty(string name) => $"Ignored: {name}";
+
+    /// <summary>Tooltip explaining an ignored generated property.</summary>
+    public virtual string IgnoredPropertyHint => "The component does not declare this property, so it was not passed.";
 
     /// <summary>Formats a duration for display.</summary>
     /// <param name="duration">The duration.</param>

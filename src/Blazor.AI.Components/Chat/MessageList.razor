@@ -12,7 +12,7 @@
     virtualized scrollbar jumpier than simply rendering everything.
 *@
 
-<div class="bai-chat__scroll" @ref="_scroll" role="log" aria-label="@AriaLabel" aria-live="polite" aria-relevant="additions">
+<div class="bai-chat__scroll" @ref="_scroll" role="log" aria-label="@(AriaLabel ?? Strings.Transcript)" aria-live="polite" aria-relevant="additions">
     <div class="bai-chat__content">
         @if (Header is not null)
         {
@@ -31,25 +31,7 @@
         }
         else
         {
-            @foreach (var message in Rendered())
-            {
-                @* Keyed here, as a direct sibling, rather than inside RenderMessage: a key inside a
-                   per-item fragment only competes with itself, so removing one message would
-                   recreate every message after it. *@
-                @if (MessageTemplate is not null)
-                {
-                    @MessageTemplate(message)
-                }
-                else
-                {
-                    <ChatMessage Message="message"
-                                 Conversation="Conversation"
-                                 Session="Session"
-                                 Animate="@(!_prerendering && _initialised)"
-                                 OnCitationClick="OnCitationClick"
-                                 @key="message.MessageId" />
-                }
-            }
+            @RenderTranscript()
         }
 
         @if (Footer is not null)
@@ -99,9 +81,9 @@
     [Parameter]
     public bool HideSystemMessages { get; set; } = true;
 
-    /// <summary>The accessible name of the transcript region.</summary>
+    /// <summary>The accessible name of the transcript region. Defaults to <see cref="AiStrings.Transcript"/>.</summary>
     [Parameter]
-    public string AriaLabel { get; set; } = "Conversation";
+    public string? AriaLabel { get; set; }
 
     /// <summary>Raised when the user activates a citation.</summary>
     [Parameter]
@@ -217,6 +199,35 @@
         // everything else is handled by the part components re-rendering themselves.
         if (ReferenceEquals(message, _messages.Count > 0 ? _messages[^1] : null)) RequestRender();
     }
+
+    /// <remarks>
+    /// Every message is emitted from this one fragment so that their keys are siblings. A key only
+    /// competes with keys in the same region, so keying inside a per-message fragment would let
+    /// removing one message recreate every message after it. An application template is keyed
+    /// through <see cref="KeyedRegion"/>, which adds no element, so the template's own markup still
+    /// sits directly in the list's flex layout.
+    /// </remarks>
+    private RenderFragment RenderTranscript() => __builder =>
+    {
+        foreach (var message in Rendered())
+        {
+            if (MessageTemplate is not null)
+            {
+                __builder.OpenComponent<KeyedRegion>(0);
+                __builder.SetKey(message.MessageId);
+                __builder.AddComponentParameter(1, nameof(KeyedRegion.ChildContent), MessageTemplate(message));
+                __builder.CloseComponent();
+                continue;
+            }
+
+            <ChatMessage Message="message"
+                         Conversation="Conversation"
+                         Session="Session"
+                         Animate="@(!_prerendering && _initialised)"
+                         OnCitationClick="OnCitationClick"
+                         @key="message.MessageId" />
+        }
+    };
 
     private RenderFragment RenderMessage(AiMessage message, bool animate) => __builder =>
     {

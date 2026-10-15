@@ -110,11 +110,18 @@ public sealed record AiFormDefinition
     /// <summary>A line of explanation under the heading.</summary>
     public string? Description { get; init; }
 
-    /// <summary>The label on the submit button.</summary>
-    public string SubmitLabel { get; init; } = "Submit";
+    /// <summary>The label on the submit button. Defaults to <see cref="AiStrings.Submit"/>.</summary>
+    public string? SubmitLabel { get; init; }
 
-    /// <summary>The label on the cancel button. Hidden when null.</summary>
-    public string? CancelLabel { get; init; } = "Cancel";
+    /// <summary>
+    /// The label on the cancel button. Defaults to <see cref="AiStrings.Cancel"/>; set it to an empty
+    /// string to hide the button.
+    /// </summary>
+    /// <remarks>
+    /// The defaults are left unset here rather than written in English, so that a form a model
+    /// produces is labelled in whatever language the application's string table speaks.
+    /// </remarks>
+    public string? CancelLabel { get; init; }
 
     /// <summary>
     /// Builds a form from a JSON Schema object, so a model can describe one with the same vocabulary

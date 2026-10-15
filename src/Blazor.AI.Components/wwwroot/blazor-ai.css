@@ -23,12 +23,9 @@
 
   --bai-color-border: #e4e4e8;
   --bai-color-border-strong: #cfd0d6;
-  --bai-color-focus: #2f6feb;
-
-  --bai-color-accent: #2f6feb;
-  --bai-color-accent-hover: #2a61cf;
-  --bai-color-accent-subtle: #eef3fe;
-  --bai-color-accent-fg: #ffffff;
+  /* This element is in a light scheme; see "Brand accent" below. */
+  --bai-if-light: initial;
+  --bai-if-dark: ;
 
   --bai-color-success: #167f4a;
   --bai-color-success-subtle: #e8f6ee;
@@ -124,11 +121,9 @@
   --bai-color-fg-inverted: #ffffff;
   --bai-color-border: #e4e4e8;
   --bai-color-border-strong: #cfd0d6;
-  --bai-color-focus: #2f6feb;
-  --bai-color-accent: #2f6feb;
-  --bai-color-accent-hover: #2a61cf;
-  --bai-color-accent-subtle: #eef3fe;
-  --bai-color-accent-fg: #ffffff;
+  /* This element is in a light scheme; see "Brand accent" below. */
+  --bai-if-light: initial;
+  --bai-if-dark: ;
   --bai-color-success: #167f4a;
   --bai-color-success-subtle: #e8f6ee;
   --bai-color-warning: #9a6200;
@@ -174,12 +169,9 @@
 
   --bai-color-border: #2c2f36;
   --bai-color-border-strong: #3d414a;
-  --bai-color-focus: #7ba7f8;
-
-  --bai-color-accent: #6d9bf7;
-  --bai-color-accent-hover: #85adf9;
-  --bai-color-accent-subtle: #1e2735;
-  --bai-color-accent-fg: #10131a;
+  /* This element is in a dark scheme; see "Brand accent" below. */
+  --bai-if-light: ;
+  --bai-if-dark: initial;
 
   --bai-color-success: #56d193;
   --bai-color-success-subtle: #16261e;
@@ -227,11 +219,9 @@
     --bai-color-fg-inverted: #14151a;
     --bai-color-border: #2c2f36;
     --bai-color-border-strong: #3d414a;
-    --bai-color-focus: #7ba7f8;
-    --bai-color-accent: #6d9bf7;
-    --bai-color-accent-hover: #85adf9;
-    --bai-color-accent-subtle: #1e2735;
-    --bai-color-accent-fg: #10131a;
+    /* This element is in a dark scheme; see "Brand accent" below. */
+    --bai-if-light: ;
+    --bai-if-dark: initial;
     --bai-color-success: #56d193;
     --bai-color-success-subtle: #16261e;
     --bai-color-warning: #e3ac52;
@@ -260,6 +250,48 @@
     --bai-syntax-deleted: #f08a8a;
     --bai-syntax-meta: #757c8a;
   }
+}
+
+/* ----------------------------------------------------------------------------
+   Brand accent
+
+   Set --bai-accent to brand both schemes, and --bai-accent-dark to give the dark
+   scheme its own shade. --bai-accent-fg and --bai-accent-fg-dark set the text
+   drawn on the accent. Hover, subtle, and focus colours are derived from the
+   resolved accent, so one token restyles all of them.
+
+   A var() in a custom property is resolved on the element that declares it, and
+   children inherit the result. These are therefore declared on every element
+   that can change the scheme or the brand: the root, any element carrying
+   data-bai-theme or a .bai-theme-* class, any element whose inline style sets a
+   brand token (which is how AiTheme Style="--bai-accent:..." works), and any
+   element given the bai-theme class, for a region branded from a stylesheet.
+
+   Which branch applies comes from the --bai-if-light and --bai-if-dark switches
+   the palettes above set. A switch set to initial is invalid, so its var()
+   falls back to the value beside it; one set to nothing contributes nothing. In
+   a light scheme only the first branch below survives, in a dark one only the
+   second.
+   ------------------------------------------------------------------------- */
+:root,
+.bai-theme,
+.bai-theme-light,
+[data-bai-theme],
+.bai-theme-dark,
+[style*="--bai-accent"] {
+  --bai-color-accent:
+    var(--bai-if-light, var(--bai-accent, #2f6feb))
+    var(--bai-if-dark, var(--bai-accent-dark, var(--bai-accent, #6d9bf7)));
+  --bai-color-accent-hover: color-mix(in srgb, var(--bai-color-accent),
+    var(--bai-if-light, #000 12%) var(--bai-if-dark, #fff 17%));
+  --bai-color-accent-subtle: color-mix(in srgb,
+    var(--bai-color-accent) var(--bai-if-light, 8%) var(--bai-if-dark, 12%), var(--bai-color-bg));
+  --bai-color-accent-fg:
+    var(--bai-if-light, var(--bai-accent-fg, #ffffff))
+    var(--bai-if-dark, var(--bai-accent-fg-dark, var(--bai-accent-fg, #10131a)));
+  --bai-color-focus:
+    var(--bai-if-light, var(--bai-color-accent))
+    var(--bai-if-dark, color-mix(in srgb, var(--bai-color-accent), #fff 10%));
 }
 
 .bai-density-compact {
@@ -525,6 +557,18 @@
   background: var(--bai-color-bg-muted);
   color: var(--bai-color-fg-muted);
   white-space: nowrap;
+}
+
+.bai-chip--danger {
+  background: var(--bai-color-danger-subtle);
+  color: var(--bai-color-danger);
+}
+
+/* Present but quieter than the default chip: informational, not a problem. */
+.bai-chip--muted {
+  background: transparent;
+  border: 1px dashed var(--bai-color-border-strong);
+  color: var(--bai-color-fg-subtle);
 }
 
 .bai-icon {
@@ -1406,6 +1450,36 @@
   color: var(--bai-color-fg-subtle);
 }
 
+/* Files the composer turned away, and why. */
+.bai-composer__notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--bai-space-2);
+  padding: var(--bai-space-1) var(--bai-space-1) var(--bai-space-1) var(--bai-space-3);
+  border-radius: var(--bai-radius);
+  background: var(--bai-color-danger-subtle);
+  color: var(--bai-color-danger);
+  font-size: var(--bai-font-size-sm);
+  line-height: var(--bai-line-height-tight);
+}
+
+.bai-composer__notice > .bai-icon {
+  flex: none;
+  margin-top: 0.4rem;
+}
+
+.bai-composer__notice-text {
+  flex: 1;
+  min-width: 0;
+  padding: 0.35rem 0;
+  overflow-wrap: anywhere;
+}
+
+.bai-composer__notice .bai-btn {
+  flex: none;
+  color: inherit;
+}
+
 .bai-composer__send {
   flex: none;
   width: 2rem;
@@ -1737,6 +1811,7 @@
   .bai-code,
   .bai-source,
   .bai-composer,
+  .bai-composer__notice,
   .bai-artifact {
     border: 1px solid CanvasText;
   }

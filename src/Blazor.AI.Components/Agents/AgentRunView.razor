@@ -14,6 +14,12 @@
     <div class="bai-panel__header" style="cursor:default">
         <AiIcon Name="sparkle" />
         <span class="bai-panel__title">@(Run.AgentName ?? Strings.Plan)</span>
+        @* The run's total across every request it made, which no single message shows. Read from
+           the run on each render, so it follows the run's Changed notifications as usage arrives. *@
+        @if (Options.ShowUsage && !Run.Usage.IsEmpty)
+        {
+            <TokenUsageView Usage="Run.Usage" ShowSpeed="false" />
+        }
         <AgentStatusBadge Status="Run.Status" />
     </div>
 

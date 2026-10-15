@@ -129,10 +129,29 @@ export function downloadText(fileName, text, mime = 'text/plain') {
 }
 
 /**
+ * Describes a file to .NET, with its content as a stream rather than inline.
+ *
+ * Sending the bytes in the interop message itself breaks on Blazor Server: the message would exceed
+ * the SignalR limit (32 KB by default) for anything but a tiny file, and the file would be dropped
+ * without a word. A stream reference is read in chunks, on Server and WebAssembly alike. A file over
+ * the limit is still described, without content, so .NET can tell the user why it was refused; the
+ * check happens here, before anything is read.
+ */
+function describeFile(file, fallbackName, maxSize) {
+  const withinLimit = !(maxSize > 0) || file.size <= maxSize;
+  return {
+    name: file.name || fallbackName,
+    contentType: file.type || 'application/octet-stream',
+    size: file.size,
+    content: withinLimit ? DotNet.createJSStreamReference(file) : null,
+  };
+}
+
+/**
  * Reports images pasted into the composer, so a screenshot on the clipboard becomes an attachment.
  * Text pastes are left alone for the browser to handle.
  */
-export function registerPaste(element, dotnet) {
+export function registerPaste(element, dotnet, maxSize = 0) {
   if (!element) return;
   unregisterPaste(element);
 
@@ -143,13 +162,8 @@ export function registerPaste(element, dotnet) {
 
     event.preventDefault();
     for (const file of files) {
-      const buffer = await file.arrayBuffer();
-      await dotnet.invokeMethodAsync('OnPastedFile', {
-        name: file.name || 'pasted-image.png',
-        contentType: file.type || 'application/octet-stream',
-        size: file.size,
-        data: bytesToBase64(new Uint8Array(buffer)),
-      }).catch(() => {});
+      await dotnet.invokeMethodAsync('OnPastedFile', describeFile(file, 'pasted-image.png', maxSize))
+        .catch(() => {});
     }
   };
 
@@ -165,7 +179,7 @@ export function unregisterPaste(element) {
 }
 
 /** Reports files dropped onto an element, and toggles a class while a drag is over it. */
-export function registerDrop(element, dotnet) {
+export function registerDrop(element, dotnet, maxSize = 0) {
   if (!element) return;
   unregisterDrop(element);
 
@@ -199,13 +213,8 @@ export function registerDrop(element, dotnet) {
     setActive(false);
 
     for (const file of Array.from(event.dataTransfer.files)) {
-      const buffer = await file.arrayBuffer();
-      await dotnet.invokeMethodAsync('OnDroppedFile', {
-        name: file.name,
-        contentType: file.type || 'application/octet-stream',
-        size: file.size,
-        data: bytesToBase64(new Uint8Array(buffer)),
-      }).catch(() => {});
+      await dotnet.invokeMethodAsync('OnDroppedFile', describeFile(file, 'file', maxSize))
+        .catch(() => {});
     }
   };
 
@@ -286,13 +295,19 @@ export function stopDictation() {
   recognition = null;
 }
 
-function bytesToBase64(bytes) {
-  let binary = '';
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
+/** The caret position in a text field, so the composer can open its menu where the user is typing. */
+export function getCaret(element) {
+  if (!element || typeof element.selectionStart !== 'number') return null;
+  return element.selectionStart;
+}
+
+/** Focuses a text field and puts the caret at a position, after .NET has rewritten its value. */
+export function setCaret(element, position) {
+  if (!element) return;
+  element.focus({ preventScroll: true });
+  if (typeof element.setSelectionRange !== 'function') return;
+  const at = Math.max(0, Math.min(position, element.value.length));
+  element.setSelectionRange(at, at);
 }
 
 export function prefersReducedMotion() {

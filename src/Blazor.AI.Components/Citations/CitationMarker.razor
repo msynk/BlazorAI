@@ -9,7 +9,7 @@
 <button type="button"
         class="bai-cite"
         title="@Tooltip"
-        aria-label="@($"Source {Citation.Number}: {Citation.Source.Title}")"
+        aria-label="@Strings.CitationLabel(Citation.Number, Citation.Source.Title)"
         @onclick="ActivateAsync">
     @Citation.Number
 </button>

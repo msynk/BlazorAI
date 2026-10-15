@@ -12,7 +12,7 @@
 
 @if (_custom is not null)
 {
-    <RendererBoundary Label="@($"The renderer for '{Part.Kind}' failed")">
+    <RendererBoundary Label="@Strings.RendererFailed(Part.Kind)">
         @_custom
     </RendererBoundary>
 }

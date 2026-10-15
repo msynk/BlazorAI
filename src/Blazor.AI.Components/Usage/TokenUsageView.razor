@@ -19,7 +19,7 @@
 
     @if (ShowSpeed && Metadata?.TokensPerSecond is { } rate)
     {
-        <span>@($"{rate:0.#} tok/s")</span>
+        <span>@Strings.TokensPerSecond(rate)</span>
     }
 
     @if (ShowLatency && Metadata?.TimeToFirstToken is { } latency)
@@ -50,10 +50,10 @@
         get
         {
             var parts = new List<string>(4);
-            if (Usage.InputTokens is { } input) parts.Add($"Input: {input:N0}");
-            if (Usage.OutputTokens is { } output) parts.Add($"Output: {output:N0}");
-            if (Usage.CachedInputTokens is { } cached) parts.Add($"Cached: {cached:N0}");
-            if (Usage.ReasoningTokens is { } reasoning) parts.Add($"Reasoning: {reasoning:N0}");
+            if (Usage.InputTokens is { } input) parts.Add(Strings.UsageLine(Strings.InputTokens, input));
+            if (Usage.OutputTokens is { } output) parts.Add(Strings.UsageLine(Strings.OutputTokens, output));
+            if (Usage.CachedInputTokens is { } cached) parts.Add(Strings.UsageLine(Strings.CachedTokens, cached));
+            if (Usage.ReasoningTokens is { } reasoning) parts.Add(Strings.UsageLine(Strings.ReasoningTokens, reasoning));
             return string.Join('\n', parts);
         }
     }

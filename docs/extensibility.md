@@ -131,13 +131,43 @@ public sealed class NorwegianStrings : AiStrings
     public override string Stop => "Stopp";
     public override string Thinking => "Tenker";
     public override string ApproveTool(string tool) => $"Tillate {tool}?";
+    public override string FieldRequired(string label) => $"{label} må fylles ut.";
+    public override string MonthGroup(DateTime date) => date.ToString("MMMM yyyy", new CultureInfo("nb-NO"));
 }
 
 services.AddBlazorAIComponents(options => options with { Strings = new NorwegianStrings() });
 ```
 
 Every string the components render comes from this object, including the formatters for durations,
-byte counts, and token counts.
+byte counts, and token counts. Messages that carry a value are methods taking that value, such as
+`FieldRequired(label)`, `FieldBelowMinimum(label, minimum)`, `AttachmentTooLarge(fileName, maxSize)`,
+and `CitationLabel(number, title)`, so a translation can put it wherever the grammar needs it. A
+model-generated form's submit and cancel buttons also use the table unless the form names its own.
+
+## The composer
+
+`PromptInput`, and `AiChat` on its behalf, takes a `MaxAttachmentSize` (10 MB by default) and an
+`Accept` filter, applied alike to picked, pasted, and dropped files. A file that does not qualify is
+never dropped silently: the user sees why in the composer, and the application hears about it through
+`OnAttachmentRejected`:
+
+```razor
+<AiChat MaxAttachmentSize="@(25 * 1024 * 1024)" OnAttachmentRejected="OnRejected" />
+
+@code {
+    private void OnRejected(AttachmentRejection rejection) =>
+        Logger.LogInformation("{File} rejected: {Reason}", rejection.FileName, rejection.Reason);
+}
+```
+
+`AttachmentRejection.Reason` is `TooLarge`, `TypeNotAllowed`, or `ReadFailed`. Handle it to offer
+another route for a large file, such as an upload to your own storage that attaches a URL.
+
+## Message templates
+
+`MessageTemplate` replaces how each message renders. The list keys every templated message by its
+identifier without adding a wrapper element, so removing or inserting a message leaves the
+components rendering the others intact, along with their state.
 
 ## Persistence and models
 
