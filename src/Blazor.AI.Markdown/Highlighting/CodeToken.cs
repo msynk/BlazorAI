@@ -52,6 +52,9 @@ public enum TokenKind
 
     /// <summary>A file header or hunk marker in a diff.</summary>
     Meta = 15,
+
+    /// <summary>A lifetime or loop label, such as Rust's <c>'a</c> or <c>'outer</c>.</summary>
+    Label = 16,
 }
 
 /// <summary>

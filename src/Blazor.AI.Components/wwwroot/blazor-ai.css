@@ -845,6 +845,8 @@
 .bai-tok-inserted { color: var(--bai-syntax-inserted); }
 .bai-tok-deleted { color: var(--bai-syntax-deleted); }
 .bai-tok-meta { color: var(--bai-syntax-meta); }
+/* Optional token: lifetimes and labels read as types unless a theme sets --bai-syntax-label. */
+.bai-tok-label { color: var(--bai-syntax-label, var(--bai-syntax-type)); font-style: italic; }
 
 /* ============================================================================
    Panels: reasoning, tools, agents, artifacts, errors

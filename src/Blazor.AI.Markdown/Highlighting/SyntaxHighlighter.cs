@@ -75,7 +75,7 @@ public static class SyntaxHighlighter
 
             if (language.Lifetimes && c == '\'' && TryLifetime(code, i, out var lifetimeEnd))
             {
-                tokens.Add(new CodeToken(TokenKind.Type, i, lifetimeEnd - i));
+                tokens.Add(new CodeToken(TokenKind.Label, i, lifetimeEnd - i));
                 i = lifetimeEnd;
                 continue;
             }

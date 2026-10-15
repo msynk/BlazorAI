@@ -28,7 +28,7 @@ a single component instance restyles the framework without touching its source.
 | Elevation | `--bai-shadow-sm`, `--bai-shadow`, `-lg` |
 | Motion | `--bai-duration-fast`, `--bai-duration`, `-slow`, `--bai-ease` |
 | Layout | `--bai-content-width`, `--bai-message-gap`, `--bai-composer-radius` |
-| Syntax | `--bai-syntax-keyword`, `-type`, `-string`, `-number`, `-comment`, and nine more |
+| Syntax | `--bai-syntax-keyword`, `-type`, `-string`, `-number`, `-comment`, and nine more; optionally `-label` for lifetimes and loop labels, which otherwise use `-type` |
 
 ## Dark mode
 

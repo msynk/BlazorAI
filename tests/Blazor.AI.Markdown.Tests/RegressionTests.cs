@@ -563,7 +563,8 @@ public sealed class HighlighterRegressionTests
         var tokens = SyntaxHighlighter.Highlight(code, "rust");
         string[] Texts(TokenKind kind) => tokens.Where(t => t.Kind == kind).Select(t => t.Slice(code).ToString()).ToArray();
 
-        Assert.Equal(["'a", "'a", "'static", "'outer", "'outer"], Texts(TokenKind.Type).Where(t => t.StartsWith('\'')));
+        Assert.Equal(["'a", "'a", "'static", "'outer", "'outer"], Texts(TokenKind.Label));
+        Assert.DoesNotContain(Texts(TokenKind.Type), t => t.StartsWith('\''));
         Assert.Equal(["'a'", "'\\n'"], Texts(TokenKind.String));
         Assert.Contains("str", Texts(TokenKind.Type));
         Assert.Contains("loop", Texts(TokenKind.Keyword));
