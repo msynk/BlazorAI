@@ -7,8 +7,10 @@
         <AiChat Session="_session"
                 AllowAttachments="true"
                 AllowDictation="true"
+                MaxAttachmentSize="MaxSize"
+                OnAttachmentRejected="OnRejected"
                 EmptyTitle="Attach something"
-                EmptyBody="Drag a file onto the composer, paste a screenshot, or use the paperclip." />
+                EmptyBody="Drag a file onto the composer, paste a screenshot, or use the paperclip. Files over 2 MB are turned away." />
     </ChildContent>
 
     <Aside>
@@ -18,6 +20,24 @@
             <li>Drag and drop onto the composer, which highlights while a drag is over it.</li>
             <li>Paste, which is how screenshots actually arrive.</li>
         </ul>
+        <p>
+            All three share one size limit and one type filter. The size is checked in the browser
+            before a byte is read, and accepted files are streamed rather than sent as one message,
+            so a large paste cannot overrun the Blazor Server message limit.
+        </p>
+        <CodeBlockView Language="razor" Code="@Snippet" />
+
+        @if (_rejections.Count > 0)
+        {
+            <h3>Turned away</h3>
+            <ul>
+                @foreach (var rejection in _rejections)
+                {
+                    <li><strong>@rejection.FileName</strong>: @Describe(rejection)</li>
+                }
+            </ul>
+        }
+
         <p>
             This demo keeps content inline as a data URL, which suits screenshots. An application
             that accepts large uploads handles <code>OnSubmit</code>, uploads to its own storage, and
@@ -30,11 +50,33 @@
 </DemoPage>
 
 @code {
+    private const long MaxSize = 2 * 1024 * 1024;
+
+    private readonly List<AttachmentRejection> _rejections = [];
     private ChatSession? _session;
 
     [Inject] private ChatSessionFactory Sessions { get; set; } = default!;
 
     protected override void OnInitialized() => _session = Sessions.Create();
+
+    // The composer already tells the user; this is where an application would log or count it.
+    private void OnRejected(AttachmentRejection rejection)
+    {
+        _rejections.Insert(0, rejection);
+        if (_rejections.Count > 5) _rejections.RemoveAt(_rejections.Count - 1);
+    }
+
+    private static string Describe(AttachmentRejection rejection) => rejection.Reason switch
+    {
+        AttachmentRejectionReason.TooLarge => $"{rejection.Size / 1024.0 / 1024.0:0.0} MB is over the limit",
+        AttachmentRejectionReason.TypeNotAllowed => "that type is not accepted",
+        _ => "it could not be read",
+    };
+
+    private const string Snippet = """
+        <AiChat MaxAttachmentSize="2 * 1024 * 1024"
+                OnAttachmentRejected="OnRejected" />
+        """;
 
     public ValueTask DisposeAsync() => _session?.DisposeAsync() ?? ValueTask.CompletedTask;
 }

@@ -80,10 +80,8 @@
 
     private string Style =>
         $"height:100%;--bai-radius:{_radius}px;" +
-        (_accent is { } accent
-            ? $"--bai-color-accent:{accent};--bai-color-accent-hover:{accent};" +
-              $"--bai-color-accent-subtle:color-mix(in srgb, {accent} 14%, transparent);"
-            : string.Empty);
+        // One brand token; hover, subtle, and focus colours are derived from it in both schemes.
+        (_accent is { } accent ? $"--bai-accent:{accent};" : string.Empty);
 
     private string Markup => $$"""
         <AiTheme Theme="AiThemeMode.{{_theme}}"
