@@ -10,9 +10,17 @@ namespace Blazor.AI.Markdown;
 /// change the result, keeps the blocks before it, and re-parses only the tail.
 /// </para>
 /// <para>
-/// The stable point is a blank line at fence depth zero, followed by a line at column zero that
-/// cannot continue the preceding block. That last condition matters: a blank line inside a loose
-/// list looks like a block boundary but is not one, and cutting there would split one list into two.
+/// A stable point is the start of a line that follows a blank line, begins at column zero, and
+/// cannot continue a list or quote, and where <see cref="MarkdownParser"/>, parsing the tail, does
+/// start a top-level block. The first test rules out a blank line inside a loose list, which looks
+/// like a boundary but is not one. The second leaves every question of context to the parser itself:
+/// whether a fence is open, whether it belongs to a list item, whether a <c>$$</c> line opened
+/// display math or merely continues a paragraph. A scanner that guessed at those would sooner or
+/// later guess differently from the parser and split a block in two.
+/// </para>
+/// <para>
+/// Neither test looks past the candidate line, so a decision never changes as more text arrives, and
+/// the blocks before a stable point are kept exactly as the parser produced them.
 /// </para>
 /// <para>
 /// An instance is not thread-safe and belongs to one streaming text part.
@@ -22,14 +30,12 @@ public sealed class IncrementalMarkdownParser
 {
     private readonly MarkdownOptions _options;
     private readonly List<MarkdownBlock> _stable = [];
+    private readonly List<int> _blockStarts = [];
+    private readonly Queue<int> _candidates = new();
     private string _source = string.Empty;
     private int _stableLength;
     private int _scanned;
-    private int _boundary;
-    private bool _fenceOpen;
-    private char _fenceChar;
-    private int _fenceLength;
-    private bool _mathOpen;
+    private int _lastCandidate;
 
     /// <summary>Creates a parser.</summary>
     /// <param name="options">Which extensions to enable.</param>
@@ -55,16 +61,20 @@ public sealed class IncrementalMarkdownParser
         if (!source.StartsWith(_source, StringComparison.Ordinal)) Reset();
         _source = source;
 
-        ScanForBoundary();
-        PromoteStableBlocks();
+        ScanForCandidates();
 
         var document = new MarkdownDocument();
-        document.Blocks.AddRange(_stable);
-
         if (_stableLength < source.Length)
         {
-            var tail = MarkdownParser.Parse(source[_stableLength..], _options, isComplete);
-            document.Blocks.AddRange(tail.Blocks);
+            _blockStarts.Clear();
+            var tail = MarkdownParser.Parse(source[_stableLength..], _options, isComplete, _blockStarts);
+            var promoted = PromoteStableBlocks(tail.Blocks);
+            document.Blocks.AddRange(_stable);
+            document.Blocks.AddRange(tail.Blocks.GetRange(promoted, tail.Blocks.Count - promoted));
+        }
+        else
+        {
+            document.Blocks.AddRange(_stable);
         }
 
         return document;
@@ -74,17 +84,15 @@ public sealed class IncrementalMarkdownParser
     public void Reset()
     {
         _stable.Clear();
+        _candidates.Clear();
         _source = string.Empty;
         _stableLength = 0;
         _scanned = 0;
-        _boundary = 0;
-        _fenceOpen = false;
-        _fenceChar = '\0';
-        _fenceLength = 0;
-        _mathOpen = false;
+        _lastCandidate = 0;
     }
 
-    private void ScanForBoundary()
+    // Queues the start of each line that could begin a stable block, looking at each line once.
+    private void ScanForCandidates()
     {
         var source = _source;
         var i = _scanned;
@@ -94,34 +102,20 @@ public sealed class IncrementalMarkdownParser
             var lineEnd = source.IndexOf('\n', i);
             if (lineEnd < 0) break;
 
-            var line = source.AsSpan(i, lineEnd - i).TrimEnd('\r');
             var next = lineEnd + 1;
-
-            if (_fenceOpen)
-            {
-                if (ClosesFence(line)) _fenceOpen = false;
-            }
-            else if (_mathOpen)
-            {
-                // A display math block, like a fence, runs across blank lines until its closer.
-                if (line.Trim().EndsWith("$$", StringComparison.Ordinal)) _mathOpen = false;
-            }
-            else if (TryOpenFence(line))
-            {
-                _fenceOpen = true;
-            }
-            else if (_options.Math && OpensMath(line))
-            {
-                _mathOpen = true;
-            }
-            else if (line.IsWhiteSpace())
+            if (source.AsSpan(i, lineEnd - i).IsWhiteSpace())
             {
                 // Undecided means the next line has not arrived yet. Stop here and look at this
                 // blank line again next time; moving past it would lose the boundary for good, and
                 // with text arriving a token at a time that would be almost every boundary.
-                var safe = IsSafeAfterBlank(source, next);
+                var safe = IsSafeAfterBlank(source, next, out var lineStart);
                 if (safe is null) break;
-                if (safe.Value) _boundary = next;
+
+                if (safe.Value && lineStart > _lastCandidate)
+                {
+                    _candidates.Enqueue(lineStart);
+                    _lastCandidate = lineStart;
+                }
             }
 
             i = next;
@@ -130,59 +124,53 @@ public sealed class IncrementalMarkdownParser
         _scanned = i;
     }
 
-    private bool TryOpenFence(ReadOnlySpan<char> line)
+    /// <summary>
+    /// Settles every queued candidate against the parse of the tail and moves the blocks before the
+    /// last one that holds into the stable prefix.
+    /// </summary>
+    /// <returns>How many of the tail's blocks were promoted.</returns>
+    private int PromoteStableBlocks(List<MarkdownBlock> tail)
     {
-        var trimmed = line.TrimStart();
-        if (trimmed.Length < 3) return false;
+        var promoted = 0;
+        var boundary = 0;
+        var block = 0;
 
-        var marker = trimmed[0];
-        if (marker is not ('`' or '~')) return false;
+        // Each start must name a block; if they ever disagree, reuse nothing rather than the wrong thing.
+        if (_blockStarts.Count != tail.Count) _candidates.Clear();
 
-        var run = 0;
-        while (run < trimmed.Length && trimmed[run] == marker) run++;
-        if (run < 3) return false;
-
-        // Matches MarkdownParser: a backtick fence's info string cannot contain a backtick, so
-        // "```inline```" is text, and treating it as a fence would pair every later fence wrongly.
-        if (marker == '`' && trimmed[run..].Contains('`')) return false;
-
-        _fenceChar = marker;
-        _fenceLength = run;
-        return true;
-    }
-
-    private bool ClosesFence(ReadOnlySpan<char> line)
-    {
-        var trimmed = line.Trim();
-        if (trimmed.Length < _fenceLength) return false;
-
-        foreach (var c in trimmed)
+        // Both sequences ascend, so one merge decides them all. A candidate the parser did not start
+        // a block on is inside something, such as an unclosed fence, and will stay inside it.
+        while (_candidates.TryDequeue(out var candidate))
         {
-            if (c != _fenceChar) return false;
+            var offset = candidate - _stableLength;
+            while (block < _blockStarts.Count && _blockStarts[block] < offset) block++;
+            if (block < _blockStarts.Count && _blockStarts[block] == offset)
+            {
+                promoted = block;
+                boundary = offset;
+            }
         }
 
-        return true;
-    }
+        if (promoted == 0) return 0;
 
-    // Same rule as MarkdownParser: a line opening a display math block that does not also close it.
-    private static bool OpensMath(ReadOnlySpan<char> line)
-    {
-        var trimmed = line.Trim();
-        return trimmed.StartsWith("$$", StringComparison.Ordinal)
-            && !(trimmed.Length >= 4 && trimmed.EndsWith("$$", StringComparison.Ordinal));
+        _stable.AddRange(tail.GetRange(0, promoted));
+        _stableLength += boundary;
+        return promoted;
     }
 
     /// <returns>
-    /// Whether the first non-blank line after a blank one starts a new block, or
-    /// <see langword="null"/> when too little of it has arrived to tell.
+    /// Whether the first non-blank line after a blank one, which starts at
+    /// <paramref name="lineStart"/>, is one no earlier block can claim, or <see langword="null"/>
+    /// when too little of it has arrived to tell.
     /// </returns>
-    private static bool? IsSafeAfterBlank(string source, int position)
+    private static bool? IsSafeAfterBlank(string source, int position, out int lineStart)
     {
         for (var i = position; i < source.Length;)
         {
             var lineEnd = source.IndexOf('\n', i);
             var complete = lineEnd >= 0;
 
+            lineStart = i;
             var line = source.AsSpan(i, (complete ? lineEnd : source.Length) - i).TrimEnd('\r');
             if (line.IsWhiteSpace())
             {
@@ -199,6 +187,7 @@ public sealed class IncrementalMarkdownParser
             return true;
         }
 
+        lineStart = position;
         return null;
     }
 
@@ -212,15 +201,5 @@ public sealed class IncrementalMarkdownParser
             && digits + 1 < line.Length
             && line[digits] is '.' or ')'
             && line[digits + 1] is ' ' or '\t';
-    }
-
-    private void PromoteStableBlocks()
-    {
-        if (_boundary <= _stableLength) return;
-
-        var segment = _source[_stableLength.._boundary];
-        var parsed = MarkdownParser.Parse(segment, _options, isComplete: true);
-        _stable.AddRange(parsed.Blocks);
-        _stableLength = _boundary;
     }
 }

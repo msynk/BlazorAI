@@ -41,6 +41,38 @@ public static class MarkdownParser
         return document;
     }
 
+    /// <summary>
+    /// Parses Markdown and reports where each top-level block starts, which is how
+    /// <see cref="IncrementalMarkdownParser"/> learns where it can safely cut.
+    /// </summary>
+    /// <param name="markdown">The source.</param>
+    /// <param name="options">Which extensions to enable.</param>
+    /// <param name="isComplete"><see langword="false"/> when more source is expected.</param>
+    /// <param name="blockStarts">
+    /// Receives, for each top-level block in order, the offset in <paramref name="markdown"/> of the
+    /// line it starts on.
+    /// </param>
+    /// <returns>The document.</returns>
+    internal static MarkdownDocument Parse(string markdown, MarkdownOptions options, bool isComplete, List<int> blockStarts)
+    {
+        var document = new MarkdownDocument();
+        if (markdown.Length == 0) return document;
+
+        var lines = SplitLines(markdown);
+        ParseBlocks(lines, 0, lines.Count, document.Blocks, options, isComplete, 0, blockStarts);
+
+        // Convert line indices to offsets. Both lists ascend, so one pass over the text does it.
+        var line = 0;
+        var offset = 0;
+        for (var i = 0; i < blockStarts.Count; i++)
+        {
+            for (; line < blockStarts[i]; line++) offset = markdown.IndexOf('\n', offset) + 1;
+            blockStarts[i] = offset;
+        }
+
+        return document;
+    }
+
     // Quotes and lists recurse. A line of ten thousand '>' characters must not overflow the stack,
     // which on Blazor Server takes the whole process down with it.
     private const int MaxNesting = 32;
@@ -69,7 +101,8 @@ public static class MarkdownParser
         List<MarkdownBlock> output,
         MarkdownOptions options,
         bool isComplete,
-        int depth)
+        int depth,
+        List<int>? blockStarts = null)
     {
         var index = start;
 
@@ -82,6 +115,9 @@ public static class MarkdownParser
                 index++;
                 continue;
             }
+
+            // Every pass from here adds exactly one block, starting on this line.
+            blockStarts?.Add(index);
 
             if (TryFencedCode(lines, ref index, end, output, options, isComplete)) continue;
             if (TryThematicBreak(line, ref index, output)) continue;
@@ -340,7 +376,11 @@ public static class MarkdownParser
         return trimmed.StartsWith(' ') ? trimmed[1..] : trimmed;
     }
 
-    private readonly record struct ListMarker(bool IsOrdered, int Start, int ContentIndent, char Bullet);
+    private readonly record struct ListMarker(bool IsOrdered, int Start, int ContentIndent, char Bullet)
+    {
+        // Changing the bullet character, or an ordered list's "." for ")", starts a new list.
+        public bool Continues(ListMarker first) => IsOrdered == first.IsOrdered && Bullet == first.Bullet;
+    }
 
     private static ListMarker? TryReadListMarker(string line)
     {
@@ -382,7 +422,7 @@ public static class MarkdownParser
         {
             if (IsBlank(lines[cursor]))
             {
-                if (cursor + 1 < end && TryReadListMarker(lines[cursor + 1]) is { } next && next.IsOrdered == list.IsOrdered) sawBlank = true;
+                if (cursor + 1 < end && TryReadListMarker(lines[cursor + 1]) is { } next && next.Continues(first)) sawBlank = true;
                 else if (cursor + 1 < end && IndentOf(lines[cursor + 1]) >= first.ContentIndent) sawBlank = true;
                 else break;
 
@@ -399,7 +439,7 @@ public static class MarkdownParser
                 continue;
             }
 
-            if (marker.IsOrdered != list.IsOrdered) break;
+            if (!marker.Continues(first)) break;
 
             var itemStart = cursor;
             cursor++;

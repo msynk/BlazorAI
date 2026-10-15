@@ -52,6 +52,13 @@ public static class SyntaxHighlighter
 
             if (char.IsWhiteSpace(c)) { i++; continue; }
 
+            // Before comments, because the "//" in url(https://example.com) is not one.
+            if (language.UrlFunctions && TryUrlFunction(code, i, tokens, out var urlEnd))
+            {
+                i = urlEnd;
+                continue;
+            }
+
             if (TryLineComment(code, i, language, out var commentEnd))
             {
                 tokens.Add(new CodeToken(TokenKind.Comment, i, commentEnd - i));
@@ -63,6 +70,13 @@ public static class SyntaxHighlighter
             {
                 tokens.Add(new CodeToken(TokenKind.Comment, i, blockEnd - i));
                 i = blockEnd;
+                continue;
+            }
+
+            if (language.Lifetimes && c == '\'' && TryLifetime(code, i, out var lifetimeEnd))
+            {
+                tokens.Add(new CodeToken(TokenKind.Type, i, lifetimeEnd - i));
+                i = lifetimeEnd;
                 continue;
             }
 
@@ -82,15 +96,10 @@ public static class SyntaxHighlighter
                 continue;
             }
 
-            // A bracket only introduces an attribute at the start of a line; elsewhere, as in
-            // items[index], it is an indexer.
-            if (language.AnnotationPrefix == c && i + 1 < code.Length && IsWordStart(code[i + 1])
-                && (c != '[' || IsLineStart(code, i)))
+            if (language.AnnotationPrefix == c && TryAnnotation(code, i, out var annotationEnd))
             {
-                var end = i + 1;
-                while (end < code.Length && IsWordChar(code[end])) end++;
-                tokens.Add(new CodeToken(TokenKind.Attribute, i, end - i));
-                i = end;
+                tokens.Add(new CodeToken(TokenKind.Attribute, i, annotationEnd - i));
+                i = annotationEnd;
                 continue;
             }
 
@@ -160,6 +169,81 @@ public static class SyntaxHighlighter
         {
             if (code[i] == '\n') return true;
             if (code[i] is not (' ' or '\t' or '\r')) return false;
+        }
+
+        return true;
+    }
+
+    // An annotation is its prefix and a name, or a path such as tokio::main. A bracket only
+    // introduces one at the start of a line; elsewhere, as in items[index], it is an indexer. A hash
+    // may be followed by "[" or "![", which is how Rust writes #[derive] and #![allow].
+    private static bool TryAnnotation(string code, int start, out int end)
+    {
+        var prefix = code[start];
+        end = start + 1;
+
+        if (prefix == '[' && !IsLineStart(code, start)) return false;
+        if (prefix == '#')
+        {
+            if (end < code.Length && code[end] == '!') end++;
+            if (end < code.Length && code[end] == '[') end++;
+            else end = start + 1;
+        }
+
+        if (end >= code.Length || !IsWordStart(code[end])) return false;
+
+        while (end < code.Length)
+        {
+            if (IsWordChar(code[end])) end++;
+            else if (MatchesAt(code, end, "::") && end + 2 < code.Length && IsWordStart(code[end + 2])) end += 2;
+            else break;
+        }
+
+        return true;
+    }
+
+    // A Rust lifetime or loop label, such as 'a, 'static, or 'outer. A name closed by a second
+    // apostrophe, as in 'a', is a character literal instead.
+    private static bool TryLifetime(string code, int start, out int end)
+    {
+        end = start + 1;
+        if (end >= code.Length || !(char.IsLetter(code[end]) || code[end] == '_')) return false;
+
+        while (end < code.Length && (char.IsLetterOrDigit(code[end]) || code[end] == '_')) end++;
+        return end >= code.Length || code[end] != '\'';
+    }
+
+    // Reads url(...) as the function name and one string argument, quoted or not, so that neither
+    // the "//" of https:// nor a parenthesis inside quotes ends it early.
+    private static bool TryUrlFunction(string code, int start, List<CodeToken> tokens, out int end)
+    {
+        end = start;
+        if (!code.AsSpan(start).StartsWith("url(", StringComparison.OrdinalIgnoreCase)) return false;
+        if (start > 0 && (IsWordChar(code[start - 1]) || code[start - 1] == '-')) return false;
+
+        var open = start + 3;
+        var i = open + 1;
+        var quote = '\0';
+
+        while (i < code.Length && code[i] != '\n')
+        {
+            var c = code[i];
+            if (c == '\\' && i + 1 < code.Length) { i += 2; continue; }
+            if (quote != '\0') { if (c == quote) quote = '\0'; }
+            else if (c is '"' or '\'') quote = c;
+            else if (c == ')') break;
+            i++;
+        }
+
+        tokens.Add(new CodeToken(TokenKind.Function, start, 3));
+        tokens.Add(new CodeToken(TokenKind.Punctuation, open, 1));
+        if (i > open + 1) tokens.Add(new CodeToken(TokenKind.String, open + 1, i - open - 1));
+
+        end = i;
+        if (i < code.Length && code[i] == ')')
+        {
+            tokens.Add(new CodeToken(TokenKind.Punctuation, i, 1));
+            end = i + 1;
         }
 
         return true;
