@@ -254,6 +254,81 @@ public sealed class ConversationStreamProcessorTests
     }
 
     [Fact]
+    public void RepeatedUsageUpdatesWithinAStreamReplaceRatherThanAdd()
+    {
+        var (conversation, processor) = Create();
+        processor.BeginGeneration();
+
+        processor.Apply(new AgentRunStartedEvent("run1"));
+        processor.Apply(new UsageUpdatedEvent(new TokenUsage { InputTokens = 100, OutputTokens = 1 }));
+        processor.Apply(new UsageUpdatedEvent(new TokenUsage { InputTokens = 100, OutputTokens = 20 }));
+        processor.Apply(new UsageUpdatedEvent(new TokenUsage { InputTokens = 100, OutputTokens = 42, Cost = 0.01m }));
+        processor.EndGeneration();
+
+        var expected = new TokenUsage { InputTokens = 100, OutputTokens = 42, Cost = 0.01m };
+        Assert.Equal(expected, conversation.Messages[0].Metadata!.Usage);
+        Assert.Equal(expected, conversation.FindRun("run1")!.Usage);
+    }
+
+    [Fact]
+    public void UsageFromSeparateStreamsAddsUpFieldByField()
+    {
+        var (conversation, processor) = Create();
+        processor.BeginGeneration();
+
+        processor.Apply(new AgentRunStartedEvent("run1"));
+        processor.Apply(new UsageUpdatedEvent(new TokenUsage { InputTokens = 100, OutputTokens = 10, ReasoningTokens = 5, Cost = 0.01m }));
+        processor.Apply(new UsageUpdatedEvent(new TokenUsage { InputTokens = 100, OutputTokens = 30, ReasoningTokens = 8, Cost = 0.02m }));
+
+        processor.BeginStream();
+        processor.Apply(new UsageUpdatedEvent(new TokenUsage { InputTokens = 150, OutputTokens = 5, CachedInputTokens = 100, Cost = 0.005m }));
+        processor.Apply(new MetadataEvent(new GenerationMetadata
+        {
+            ModelId = "m1",
+            Usage = new TokenUsage { InputTokens = 150, OutputTokens = 12, CachedInputTokens = 100, Cost = 0.006m },
+        }));
+        processor.EndGeneration();
+
+        var expected = new TokenUsage
+        {
+            InputTokens = 250,
+            OutputTokens = 42,
+            CachedInputTokens = 100,
+            ReasoningTokens = 8,
+            Cost = 0.026m,
+        };
+
+        var metadata = conversation.Messages[0].Metadata!;
+        Assert.Equal(expected, metadata.Usage);
+        Assert.Null(metadata.Usage.CacheWriteTokens);
+        Assert.Equal("m1", metadata.ModelId);
+        Assert.Equal(expected, conversation.FindRun("run1")!.Usage);
+    }
+
+    [Fact]
+    public void ARunSpanningSeveralTurnsSumsTheUsageOfEach()
+    {
+        var (conversation, processor) = Create();
+
+        processor.BeginGeneration();
+        processor.Apply(new AgentRunStartedEvent("run1"));
+        processor.Apply(new UsageUpdatedEvent(new TokenUsage { InputTokens = 10, OutputTokens = 2 }));
+        processor.Apply(new UsageUpdatedEvent(new TokenUsage { InputTokens = 10, OutputTokens = 4 }));
+        processor.EndGeneration();
+
+        processor.BeginGeneration();
+        processor.Apply(new AgentStepStartedEvent("run1", "s2"));
+        processor.Apply(new UsageUpdatedEvent(new TokenUsage { InputTokens = 20, OutputTokens = 1 }));
+        processor.Apply(new UsageUpdatedEvent(new TokenUsage { InputTokens = 20, OutputTokens = 3 }));
+        processor.EndGeneration();
+
+        Assert.Equal(new TokenUsage { InputTokens = 10, OutputTokens = 4 }, conversation.Messages[0].Metadata!.Usage);
+        Assert.Equal(new TokenUsage { InputTokens = 20, OutputTokens = 3 }, conversation.Messages[1].Metadata!.Usage);
+        Assert.Equal(new TokenUsage { InputTokens = 30, OutputTokens = 7 }, conversation.FindRun("run1")!.Usage);
+        Assert.Equal(conversation.TotalUsage, conversation.FindRun("run1")!.Usage);
+    }
+
+    [Fact]
     public void StatusTextIsTransientAndClearedOnCompletion()
     {
         var (conversation, processor) = Create();

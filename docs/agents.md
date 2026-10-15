@@ -103,5 +103,7 @@ transition without being interrupted.
 
 ## Usage across steps
 
-`AgentRun.Usage` accumulates the usage of its steps, because `TokenUsage` is additive. A run that
-called a model six times reports what the whole run cost, not what the last call did.
+`AgentRun.Usage` accumulates the usage of every request made within the run, because `TokenUsage` is
+additive. A run that called a model six times reports what the whole run cost, not what the last call
+did. Each request counts once, at the last usage its stream reported, however many running totals
+the provider sent along the way.

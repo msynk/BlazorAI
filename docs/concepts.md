@@ -119,7 +119,11 @@ blip is worse than showing it with a retry button underneath.
 `TokenUsage`. It is merged rather than replaced, because providers report it piecemeal, and it is
 kept off the hot path so streaming never touches it.
 
-`TokenUsage` is additive, which is how a run accumulates the usage of its steps:
+Usage reports within one transport stream are cumulative, so the latest replaces the earlier ones;
+separate streams add up. A message's usage therefore covers every request its tool loop made, and a
+run's covers every request made within it. [Streaming](streaming.md#accounting) has the details.
+
+`TokenUsage` is additive, field by field, which is how those sums are formed:
 
 ```csharp
 var total = first + second;

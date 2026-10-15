@@ -187,13 +187,25 @@ public sealed record StatusEvent : AiEvent
 /// <summary>
 /// Updated token accounting. May arrive several times; later events replace earlier ones.
 /// </summary>
+/// <remarks>
+/// <para>
+/// The usage is cumulative for the stream that carries it: one call to
+/// <see cref="IAiTransport.StreamAsync"/>. A later event in the same stream replaces an earlier one
+/// rather than adding to it, so a transport can forward a provider's running totals as they come.
+/// </para>
+/// <para>
+/// Separate streams add up. A turn that calls tools makes one request per round trip, and the
+/// message it produces reports the sum of each stream's final usage, as does any agent run the
+/// streams ran within.
+/// </para>
+/// </remarks>
 public sealed record UsageUpdatedEvent : AiEvent
 {
     /// <summary>Creates the event.</summary>
-    /// <param name="usage">The usage so far.</param>
+    /// <param name="usage">The usage of this stream so far.</param>
     public UsageUpdatedEvent(TokenUsage usage) => Usage = usage;
 
-    /// <summary>The usage so far.</summary>
+    /// <summary>The usage of this stream so far.</summary>
     public TokenUsage Usage { get; }
 
     /// <inheritdoc />

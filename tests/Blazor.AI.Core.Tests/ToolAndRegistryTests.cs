@@ -117,7 +117,7 @@ public sealed class GenerativeUiTests
     }
 
     [Fact]
-    public void BindingConvertsKnownPropertiesAndRejectsUnknownOnes()
+    public void BindingConvertsKnownPropertiesAndIgnoresUnknownOnes()
     {
         var registry = new GenerativeUiRegistry();
         var component = registry.Register<WeatherCard>("weather_card");
@@ -128,7 +128,25 @@ public sealed class GenerativeUiTests
         Assert.Equal("Oslo", result.Parameters["City"]);
         Assert.Equal(3, result.Parameters["Days"]);
         Assert.False(result.Parameters.ContainsKey("OnClick"));
+        Assert.Equal(2, result.Parameters.Count);
+
+        // Ignored, as documented: listed for diagnostics, but not errors and not held against completeness.
+        Assert.Empty(result.Errors);
+        Assert.True(result.IsComplete);
+        Assert.Equal(["onClick", "nope"], result.IgnoredProperties);
+    }
+
+    [Fact]
+    public void AnUnknownPropertyDoesNotHideARealError()
+    {
+        var registry = new GenerativeUiRegistry();
+        var component = registry.Register<WeatherCard>("weather_card", null, "City");
+
+        var result = GenerativePropsBinder.Bind(component, JsonDocument.Parse("""{"days":"many","nope":1}""").RootElement);
+
+        Assert.False(result.IsComplete);
         Assert.Equal(2, result.Errors.Count);
+        Assert.Equal(["nope"], result.IgnoredProperties);
     }
 
     [Fact]

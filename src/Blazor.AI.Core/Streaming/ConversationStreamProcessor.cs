@@ -17,6 +17,12 @@ namespace Blazor.AI;
 public sealed class ConversationStreamProcessor
 {
     private readonly Conversation _conversation;
+
+    // Usage within a stream is cumulative, so each report replaces the stream's last one. These hold
+    // what each message and run had before the current stream began, which the stream's latest report
+    // is added to.
+    private readonly Dictionary<AiMessage, TokenUsage> _messageUsageBefore = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<AgentRun, TokenUsage> _runUsageBefore = new(ReferenceEqualityComparer.Instance);
     private DateTimeOffset? _startedAt;
     private DateTimeOffset? _firstTokenAt;
 
@@ -58,11 +64,27 @@ public sealed class ConversationStreamProcessor
     {
         _startedAt = DateTimeOffset.UtcNow;
         _firstTokenAt = null;
+        BeginStream();
 
         Current = message ?? _conversation.AddMessage(new AiMessage(AiRole.Assistant));
         Current.SetStatus(MessageStatus.Pending);
         Current.MergeMetadata(new GenerationMetadata { StartedAt = _startedAt });
         return Current;
+    }
+
+    /// <summary>
+    /// Marks the start of another transport stream within the current generation.
+    /// </summary>
+    /// <remarks>
+    /// Usage reported within one stream is cumulative, so each <see cref="UsageUpdatedEvent"/>
+    /// replaces the last. Usage from separate streams, such as the request made after each tool
+    /// round trip, adds up. Call this before applying the events of each further stream so the two
+    /// can be told apart; <see cref="BeginGeneration"/> begins the first stream itself.
+    /// </remarks>
+    public void BeginStream()
+    {
+        _messageUsageBefore.Clear();
+        _runUsageBefore.Clear();
     }
 
     /// <summary>
@@ -98,7 +120,7 @@ public sealed class ConversationStreamProcessor
             case GenerativeUiEvent generative: OnGenerativeUi(generative); break;
             case GenerativeUiDeltaEvent generative: OnGenerativeUiDelta(generative); break;
             case UsageUpdatedEvent usage: OnUsage(usage); break;
-            case MetadataEvent metadata: Target(evt)?.MergeMetadata(metadata.Metadata); break;
+            case MetadataEvent metadata: OnMetadata(metadata); break;
             case AgentRunStartedEvent run: OnRunStarted(run); break;
             case AgentPlanEvent plan: _conversation.GetOrAddRun(plan.RunId).SetPlan(plan.Steps); break;
             case AgentStepStartedEvent step: OnStepStarted(step); break;
@@ -139,6 +161,9 @@ public sealed class ConversationStreamProcessor
 
         Current = null;
         CurrentRun = null;
+
+        // The generation's last stream ends with it, so events replayed afterwards start afresh.
+        BeginStream();
     }
 
     private AiMessage? Target(AiEvent evt)
@@ -352,8 +377,35 @@ public sealed class ConversationStreamProcessor
 
     private void OnUsage(UsageUpdatedEvent evt)
     {
-        Target(evt)?.MergeMetadata(new GenerationMetadata { Usage = evt.Usage });
-        CurrentRun?.AddUsage(evt.Usage);
+        if (Target(evt) is not { } message) return;
+        message.MergeMetadata(new GenerationMetadata { Usage = RecordUsage(message, evt.Usage) });
+    }
+
+    private void OnMetadata(MetadataEvent evt)
+    {
+        if (Target(evt) is not { } message) return;
+
+        // Usage carried on metadata is a usage report like any other, and must not overwrite the
+        // usage earlier streams contributed to the message.
+        var metadata = evt.Metadata;
+        if (!metadata.Usage.IsEmpty) metadata = metadata with { Usage = RecordUsage(message, metadata.Usage) };
+        message.MergeMetadata(metadata);
+    }
+
+    /// <summary>
+    /// Records the current stream's latest cumulative usage against the message and the current run.
+    /// </summary>
+    /// <returns>The message's usage including the stream's latest report.</returns>
+    private TokenUsage RecordUsage(AiMessage message, TokenUsage streamUsage)
+    {
+        if (CurrentRun is { } run) run.SetUsage(Before(_runUsageBefore, run, run.Usage) + streamUsage);
+        return Before(_messageUsageBefore, message, message.Metadata?.Usage ?? default) + streamUsage;
+
+        static TokenUsage Before<T>(Dictionary<T, TokenUsage> before, T key, TokenUsage current) where T : notnull
+        {
+            if (!before.TryGetValue(key, out var usage)) before[key] = usage = current;
+            return usage;
+        }
     }
 
     private void OnRunStarted(AgentRunStartedEvent evt)

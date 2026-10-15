@@ -9,6 +9,9 @@ namespace Blazor.AI;
 /// </remarks>
 public sealed class AgentStep
 {
+    // Copy-on-write, like the steps of a run: the timeline reads the list on the renderer's thread
+    // while calls are recorded on the transport's.
+    private string[] _toolCallIds = [];
     private int _version;
 
     /// <summary>Creates a step.</summary>
@@ -50,7 +53,7 @@ public sealed class AgentStep
     public TimeSpan? Duration => StartedAt is { } s && CompletedAt is { } c ? c - s : null;
 
     /// <summary>Identifiers of the tool calls made during this step.</summary>
-    public List<string> ToolCallIds { get; } = [];
+    public IReadOnlyList<string> ToolCallIds => Volatile.Read(ref _toolCallIds);
 
     /// <summary>Increments on every change, for cheap render checks.</summary>
     public int Version => _version;
@@ -63,6 +66,26 @@ public sealed class AgentStep
     {
         Status = AgentStepStatus.Running;
         StartedAt ??= DateTimeOffset.UtcNow;
+        Touch();
+    }
+
+    /// <summary>Records a tool call made during this step. Recording the same call twice has no effect.</summary>
+    /// <param name="toolCallId">The tool call identifier.</param>
+    public void AddToolCall(string toolCallId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(toolCallId);
+
+        // A compare-and-swap loop rather than a plain write, because tools run in parallel and two
+        // may report into the same step at once.
+        string[] current, updated;
+        do
+        {
+            current = Volatile.Read(ref _toolCallIds);
+            if (current.Contains(toolCallId, StringComparer.Ordinal)) return;
+            updated = [.. current, toolCallId];
+        }
+        while (Interlocked.CompareExchange(ref _toolCallIds, updated, current) != current);
+
         Touch();
     }
 

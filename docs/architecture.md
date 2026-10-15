@@ -89,7 +89,7 @@ re-render by comparing two integers.
 SubmitAsync
    └─ append the user message
       └─ for each round, up to MaxToolRoundtrips
-           ├─ stream from the transport, applying events
+           ├─ stream from the transport, applying events (a new stream each round)
            ├─ collect tool calls whose arguments completed
            ├─ ask the approval policy about each
            ├─ wait for a human where one is required
@@ -104,6 +104,14 @@ representation of a tool call, and the UI has nothing to deduplicate.
 
 The loop is bounded. A model that keeps calling tools stops after `MaxToolRoundtrips` with a visible
 explanation, because the alternative is an application that spends money indefinitely.
+
+Each round is a separate stream, which is what usage accounting keys on: reports within a stream
+replace each other, and the streams of a turn add up.
+
+A turn claims the session by publishing its own cancellation source, so claiming and becoming
+cancellable are one step and a `Stop` from another thread is never lost, however early it arrives.
+Disposing the session cancels the turn in flight and detaches every handler; no event is raised after
+it.
 
 ## Rendering is deliberately behind
 

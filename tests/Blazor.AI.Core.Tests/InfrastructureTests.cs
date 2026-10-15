@@ -214,6 +214,46 @@ public sealed class TextPacingTests
     }
 
     [Fact]
+    public void PacingSettingsThatWouldStallTheStreamAreRejected()
+    {
+        // Zero characters per tick never drains the buffer; minus one millisecond is Task.Delay's "forever".
+        Assert.Throws<ArgumentOutOfRangeException>(() => new TextPacingOptions { MaxCharsPerTick = 0 });
+        Assert.Throws<ArgumentOutOfRangeException>(() => new TextPacingOptions { MinCharsPerTick = 0 });
+        Assert.Throws<ArgumentOutOfRangeException>(() => new TextPacingOptions { Interval = TimeSpan.FromMilliseconds(-1) });
+    }
+
+    [Fact]
+    public void AMinimumAboveTheMaximumIsRejectedWhereTheSettingsAreUsed()
+    {
+        var inverted = new TextPacingOptions { MinCharsPerTick = 10, MaxCharsPerTick = 5 };
+
+        var error = Assert.Throws<ArgumentOutOfRangeException>(() => Replay([]).Paced(inverted));
+        Assert.Contains(nameof(TextPacingOptions.MaxCharsPerTick), error.Message, StringComparison.Ordinal);
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ChatSessionOptions { Pacing = inverted });
+    }
+
+    [Fact]
+    public async Task AMinimumAboveTheDefaultMaximumIsFineOnceTheMaximumIsRaised()
+    {
+        // Set in this order, the minimum briefly exceeds the default maximum, which must not throw.
+        var options = new TextPacingOptions
+        {
+            MinCharsPerTick = 60,
+            MaxCharsPerTick = 100,
+            Interval = TimeSpan.FromMilliseconds(1),
+        };
+
+        var text = new System.Text.StringBuilder();
+        await foreach (var evt in Replay([new TextDeltaEvent(new string('x', 250))]).Paced(options))
+        {
+            if (evt is TextDeltaEvent delta) text.Append(delta.Delta);
+        }
+
+        Assert.Equal(250, text.Length);
+        Assert.Equal(options, new ChatSessionOptions { Pacing = options }.Pacing);
+    }
+
+    [Fact]
     public async Task AConsumerThatStopsEarlyAlsoStopsTheSource()
     {
         var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

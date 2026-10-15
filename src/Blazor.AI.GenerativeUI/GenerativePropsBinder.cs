@@ -15,7 +15,21 @@ public sealed record GenerativeBindResult(
     IReadOnlyDictionary<string, object?> Parameters,
     IReadOnlyList<string> Errors)
 {
-    /// <summary><see langword="true"/> when every supplied property bound cleanly.</summary>
+    /// <summary>
+    /// Supplied property names the component does not declare as bindable, and which were therefore
+    /// ignored.
+    /// </summary>
+    /// <remarks>
+    /// Not errors: models routinely add a property nobody asked for, and the card is no less complete
+    /// for leaving it out. Listed for diagnostics, such as noticing that a model guesses property
+    /// names because the schema it was given is out of date.
+    /// </remarks>
+    public IReadOnlyList<string> IgnoredProperties { get; init; } = [];
+
+    /// <summary>
+    /// <see langword="true"/> when every declared property supplied bound cleanly and every required
+    /// one was present. Ignored properties do not count against it.
+    /// </summary>
     public bool IsComplete => Errors.Count == 0;
 }
 
@@ -26,8 +40,10 @@ public sealed record GenerativeBindResult(
 /// <para>
 /// The binder is intentionally strict about what it accepts and forgiving about what it does with
 /// the rest. Unknown property names are ignored rather than passed through, so a hallucinated
-/// property cannot reach the component; a value of the wrong shape is reported and skipped rather
-/// than thrown, so one bad field does not lose the whole card.
+/// property cannot reach the component, and are listed in
+/// <see cref="GenerativeBindResult.IgnoredProperties"/> rather than reported as errors; a value of
+/// the wrong shape is reported and skipped rather than thrown, so one bad field does not lose the
+/// whole card.
 /// </para>
 /// <para>
 /// It tolerates partial input by design, since props stream in and a component is rendered several
@@ -58,6 +74,7 @@ public static class GenerativePropsBinder
 
         var parameters = new Dictionary<string, object?>(StringComparer.Ordinal);
         var errors = new List<string>();
+        var ignored = new List<string>();
 
         if (props is not { ValueKind: JsonValueKind.Object } payload)
         {
@@ -69,7 +86,7 @@ public static class GenerativePropsBinder
             var declared = component.FindProperty(property.Name);
             if (declared is null)
             {
-                errors.Add($"'{property.Name}' is not a property of '{component.Name}'.");
+                ignored.Add(property.Name);
                 continue;
             }
 
@@ -107,7 +124,7 @@ public static class GenerativePropsBinder
             }
         }
 
-        return new GenerativeBindResult(parameters, errors);
+        return new GenerativeBindResult(parameters, errors) { IgnoredProperties = ignored };
     }
 
     private static bool IsNullable(Type type) => !type.IsValueType || Nullable.GetUnderlyingType(type) is not null;

@@ -4,8 +4,16 @@ namespace Blazor.AI;
 /// Token accounting for one or more generations.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Every field is optional because providers report different subsets. Instances are additive via
-/// the addition operator, which is how a run accumulates the usage of its individual steps.
+/// the addition operator, which is how a message accumulates the usage of each request a tool loop
+/// makes, and a run the usage of every request made within it.
+/// </para>
+/// <para>
+/// Addition is field by field and keeps absence: a field missing on both sides stays missing, and
+/// one missing on a single side takes the other side's value. A total therefore never claims a zero
+/// the provider did not report.
+/// </para>
 /// </remarks>
 public readonly record struct TokenUsage
 {

@@ -10,6 +10,8 @@ namespace Blazor.AI;
 /// </remarks>
 public sealed record ChatSessionOptions
 {
+    private readonly TextPacingOptions? _pacing = TextPacingOptions.Default;
+
     /// <summary>Generation settings passed to the transport on every request.</summary>
     public AiRequestOptions? RequestOptions { get; init; }
 
@@ -33,7 +35,17 @@ public sealed record ChatSessionOptions
     /// Evens out bursty text output. Set to <see langword="null"/> to render deltas exactly as the
     /// transport produces them.
     /// </summary>
-    public TextPacingOptions? Pacing { get; init; } = TextPacingOptions.Default;
+    /// <exception cref="ArgumentOutOfRangeException">The pacing settings contradict each other.</exception>
+    public TextPacingOptions? Pacing
+    {
+        get => _pacing;
+        init
+        {
+            // Validated here so a misconfiguration fails at startup, not on the first reply.
+            value?.Validate();
+            _pacing = value;
+        }
+    }
 
     /// <summary>
     /// How long to wait for the whole turn, including tool round trips. Null means no limit beyond

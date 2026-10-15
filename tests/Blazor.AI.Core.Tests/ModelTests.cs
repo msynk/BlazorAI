@@ -435,6 +435,50 @@ public sealed class ThreadSafetyTests
         Assert.Equal(3, run.Steps.Count);
     }
 
+    [Fact]
+    public async Task AStepsToolCallsCanBeEnumeratedWhileCallsAreRecorded()
+    {
+        var step = new AgentRun("run1").GetOrAddStep("s1");
+
+        await RaceAsync(
+            () =>
+            {
+                // Several writers, as when tools running in parallel report into the same step, each
+                // recording its call twice.
+                Parallel.For(0, 2000, i =>
+                {
+                    step.AddToolCall($"call{i}");
+                    step.AddToolCall($"call{i}");
+                });
+            },
+            () =>
+            {
+                foreach (var id in step.ToolCallIds) _ = id.Length;
+            });
+
+        Assert.Equal(2000, step.ToolCallIds.Count);
+        Assert.Equal(2000, step.ToolCallIds.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public async Task ARunsUsageIsNeverReadHalfUpdated()
+    {
+        var run = new AgentRun("run1");
+
+        await RaceAsync(
+            () =>
+            {
+                for (var i = 1; i <= 20000; i++) run.AddUsage(new TokenUsage { InputTokens = 1, OutputTokens = 1 });
+            },
+            () =>
+            {
+                var usage = run.Usage;
+                Assert.Equal(usage.InputTokens, usage.OutputTokens);
+            });
+
+        Assert.Equal(20000, run.Usage.InputTokens);
+    }
+
     private static async Task RaceAsync(Action write, Action read)
     {
         using var done = new CancellationTokenSource();

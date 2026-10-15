@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace Blazor.AI;
 
 /// <summary>
@@ -19,6 +21,9 @@ public sealed class AgentRun
     // Copy-on-write: the timeline enumerates the steps on the renderer's thread while the stream
     // revises the plan on the transport's.
     private volatile AgentStep[] _steps = [];
+
+    // Boxed so a reader never sees a total that is half one update and half the next.
+    private volatile StrongBox<TokenUsage> _usage = new();
     private int _version;
 
     /// <summary>Creates a run.</summary>
@@ -65,8 +70,12 @@ public sealed class AgentRun
     /// <summary>How long the run took, or has taken so far.</summary>
     public TimeSpan Elapsed => (CompletedAt ?? DateTimeOffset.UtcNow) - StartedAt;
 
-    /// <summary>Token usage accumulated across every step.</summary>
-    public TokenUsage Usage { get; private set; }
+    /// <summary>Token usage of every model request made within the run.</summary>
+    /// <remarks>
+    /// Each request counts once, with the last usage its stream reported, so a run that called a
+    /// model six times reports the sum of six final figures however many updates each one streamed.
+    /// </remarks>
+    public TokenUsage Usage => _usage.Value;
 
     /// <summary>The failure that ended the run, when it failed.</summary>
     public AiError? Error { get; private set; }
@@ -188,11 +197,15 @@ public sealed class AgentRun
         Touch();
     }
 
-    /// <summary>Adds token usage from one step to the run total.</summary>
+    /// <summary>Adds the final token usage of one request to the run total.</summary>
     /// <param name="usage">The usage to add.</param>
-    public void AddUsage(TokenUsage usage)
+    public void AddUsage(TokenUsage usage) => SetUsage(Usage + usage);
+
+    /// <summary>Replaces the run total, for a stream whose cumulative usage supersedes its last report.</summary>
+    /// <param name="usage">The new total.</param>
+    internal void SetUsage(TokenUsage usage)
     {
-        Usage += usage;
+        _usage = new StrongBox<TokenUsage>(usage);
         Touch();
     }
 

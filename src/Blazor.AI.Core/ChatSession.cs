@@ -33,8 +33,10 @@ public sealed class ChatSession : IAsyncDisposable
     private readonly IServiceProvider? _services;
     private readonly ILogger _logger;
     private readonly Dictionary<string, TaskCompletionSource<ApprovalDecision>> _approvals = new(StringComparer.Ordinal);
+
+    // Set for exactly as long as a turn is in flight: publishing it is how a turn claims the session,
+    // so there is never a moment when a turn is running and Stop has nothing to cancel.
     private CancellationTokenSource? _cts;
-    private int _turnActive;
     private volatile bool _disposed;
 
     /// <summary>Creates a session.</summary>
@@ -76,7 +78,7 @@ public sealed class ChatSession : IAsyncDisposable
     public ConversationStreamProcessor Processor { get; }
 
     /// <summary><see langword="true"/> while a turn is in flight.</summary>
-    public bool IsGenerating => Volatile.Read(ref _turnActive) != 0;
+    public bool IsGenerating => Volatile.Read(ref _cts) is not null;
 
     /// <summary>The failure from the last turn, cleared when a new turn starts.</summary>
     public AiError? LastError { get; private set; }
@@ -84,7 +86,8 @@ public sealed class ChatSession : IAsyncDisposable
     /// <summary>Raised whenever anything the UI cares about changes.</summary>
     /// <remarks>
     /// Coarse by design. Components should route it through a <see cref="RenderScheduler"/> so a
-    /// fast stream cannot render more often than the frame rate.
+    /// fast stream cannot render more often than the frame rate. Never raised once the session has
+    /// been disposed, like the other session events.
     /// </remarks>
     public event Action? StateChanged;
 
@@ -176,6 +179,10 @@ public sealed class ChatSession : IAsyncDisposable
         }, cancellationToken);
 
     /// <summary>Stops the current turn. The partial answer is kept and marked cancelled.</summary>
+    /// <remarks>
+    /// Safe to call from any thread. A turn that has started but not yet sent its request is stopped
+    /// too; with no turn in flight this does nothing, and never affects a later turn.
+    /// </remarks>
     public void Stop()
     {
         try
@@ -187,7 +194,7 @@ public sealed class ChatSession : IAsyncDisposable
             // The turn finished and released its token source between the read and the cancel.
         }
 
-        StateChanged?.Invoke();
+        RaiseStateChanged();
     }
 
     /// <summary>
@@ -220,7 +227,7 @@ public sealed class ChatSession : IAsyncDisposable
 
         call?.SetApproval(decision);
         waiter?.TrySetResult(decision);
-        StateChanged?.Invoke();
+        RaiseStateChanged();
     }
 
     /// <summary>
@@ -251,12 +258,33 @@ public sealed class ChatSession : IAsyncDisposable
     /// and generates the reply.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The claim is a compare-and-swap rather than a check of <see cref="IsGenerating"/>, so two
     /// callers racing on different threads cannot both start a turn or both edit the thread.
+    /// </para>
+    /// <para>
+    /// What is swapped in is the turn's own token source, created beforehand, so claiming the turn
+    /// and making it cancellable are one step. A <see cref="Stop"/> from another thread while the
+    /// conversation is being prepared therefore cancels the turn instead of finding nothing to cancel.
+    /// </para>
     /// </remarks>
     private async Task<AiMessage?> StartTurnAsync(Func<bool> prepare, CancellationToken cancellationToken)
     {
-        if (_disposed || Interlocked.CompareExchange(ref _turnActive, 1, 0) != 0) return null;
+        if (_disposed) return null;
+
+        // The timeout has its own source so that running out of time can be told apart from Stop.
+        var timeout = Options.Timeout is { } limit ? new CancellationTokenSource(limit) : null;
+        var cts = timeout is null
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+
+        // Disposal sets its flag before cancelling the published source, and this reads the flag after
+        // publishing, so one of the two always sees the other.
+        if (Interlocked.CompareExchange(ref _cts, cts, null) is not null || _disposed)
+        {
+            Release(cts, timeout);
+            return null;
+        }
 
         bool proceed;
         try
@@ -265,17 +293,26 @@ public sealed class ChatSession : IAsyncDisposable
         }
         catch
         {
-            Volatile.Write(ref _turnActive, 0);
+            Release(cts, timeout);
             throw;
         }
 
         if (!proceed)
         {
-            Volatile.Write(ref _turnActive, 0);
+            Release(cts, timeout);
             return null;
         }
 
-        return await RunTurnAsync(null, cancellationToken).ConfigureAwait(false);
+        return await RunTurnAsync(cts, timeout, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Ends a turn's claim on the session and disposes its token sources.</summary>
+    /// <remarks>The turn owns its token sources. Stop and DisposeAsync only ever cancel them.</remarks>
+    private void Release(CancellationTokenSource cts, CancellationTokenSource? timeout)
+    {
+        Interlocked.CompareExchange(ref _cts, null, cts);
+        cts.Dispose();
+        timeout?.Dispose();
     }
 
     private void AppendUserMessage(string text, IReadOnlyList<Attachment>? attachments)
@@ -295,27 +332,24 @@ public sealed class ChatSession : IAsyncDisposable
         }
     }
 
-    private async Task<AiMessage?> RunTurnAsync(AiMessage? into, CancellationToken cancellationToken)
+    private async Task<AiMessage?> RunTurnAsync(
+        CancellationTokenSource cts,
+        CancellationTokenSource? timeout,
+        CancellationToken cancellationToken)
     {
         LastError = null;
-
-        // The timeout has its own source so that running out of time can be told apart from Stop.
-        var timeout = Options.Timeout is { } limit ? new CancellationTokenSource(limit) : null;
-        var cts = timeout is null
-            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
-            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
-        Interlocked.Exchange(ref _cts, cts);
-        if (_disposed) cts.Cancel();
         var token = cts.Token;
 
         AiMessage? assistant = null;
         try
         {
-            assistant = Processor.BeginGeneration(into);
-            StateChanged?.Invoke();
+            assistant = Processor.BeginGeneration();
+            RaiseStateChanged();
 
             for (var round = 0; round <= Options.MaxToolRoundtrips; round++)
             {
+                // Stop may have arrived before the first request, or while tools ran.
+                token.ThrowIfCancellationRequested();
                 if (round > 0) assistant.SetStatus(MessageStatus.Streaming);
 
                 var ready = new List<ToolCallPart>();
@@ -374,14 +408,9 @@ public sealed class ChatSession : IAsyncDisposable
         }
         finally
         {
-            // The turn owns its token sources. Stop and DisposeAsync only ever cancel them.
-            Interlocked.CompareExchange(ref _cts, null, cts);
-            cts.Dispose();
-            timeout?.Dispose();
-
-            Volatile.Write(ref _turnActive, 0);
-            StateChanged?.Invoke();
-            if (assistant is not null) TurnCompleted?.Invoke(assistant);
+            Release(cts, timeout);
+            RaiseStateChanged();
+            if (assistant is not null && !_disposed) TurnCompleted?.Invoke(assistant);
         }
 
         return assistant;
@@ -389,6 +418,10 @@ public sealed class ChatSession : IAsyncDisposable
 
     private async Task ConsumeAsync(AiRequest request, CancellationToken cancellationToken)
     {
+        // Each request is a stream of its own, whose usage adds to the earlier rounds' rather than
+        // replacing it.
+        Processor.BeginStream();
+
         var stream = _transport.StreamAsync(request, cancellationToken);
         if (Options.Pacing is { } pacing) stream = stream.Paced(pacing, cancellationToken);
 
@@ -396,7 +429,7 @@ public sealed class ChatSession : IAsyncDisposable
         {
             Processor.Apply(evt);
             if (evt is ErrorEvent { IsTerminal: true } error) LastError = error.Error;
-            StateChanged?.Invoke();
+            RaiseStateChanged();
         }
     }
 
@@ -466,7 +499,7 @@ public sealed class ChatSession : IAsyncDisposable
             }
 
             call.SetStatus(ToolCallStatus.Running);
-            StateChanged?.Invoke();
+            RaiseStateChanged();
 
             var started = DateTimeOffset.UtcNow;
             var outcome = await tool.InvokeAsync(invocation, cancellationToken).ConfigureAwait(false);
@@ -490,7 +523,7 @@ public sealed class ChatSession : IAsyncDisposable
         }
         finally
         {
-            StateChanged?.Invoke();
+            RaiseStateChanged();
         }
     }
 
@@ -517,8 +550,8 @@ public sealed class ChatSession : IAsyncDisposable
         lock (_approvals) _approvals[call.ToolCallId] = waiter;
 
         call.SetStatus(ToolCallStatus.AwaitingApproval);
-        ApprovalRequested?.Invoke(call);
-        StateChanged?.Invoke();
+        if (!_disposed) ApprovalRequested?.Invoke(call);
+        RaiseStateChanged();
 
         await using var registration = cancellationToken.Register(() => waiter.TrySetCanceled(cancellationToken))
             .ConfigureAwait(false);
@@ -557,15 +590,26 @@ public sealed class ChatSession : IAsyncDisposable
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Cancels the turn in flight, if any, and detaches every handler: the session raises no events
+    /// after this, so a disposed component is never asked to render.
+    /// </remarks>
     public async ValueTask DisposeAsync()
     {
         _disposed = true;
+        StateChanged = null;
+        TurnCompleted = null;
+        ApprovalRequested = null;
 
-        // The running turn owns and disposes its token source; disposing it here as well would make
-        // a concurrent Stop throw.
+        // Pairs with the publish-then-check in StartTurnAsync: the flag must be visible before the
+        // token source is read, or a turn starting now could be missed by both sides.
+        Interlocked.MemoryBarrier();
+
+        // The running turn owns and disposes its token source, and keeps its claim until it has
+        // unwound; disposing the source here as well would make a concurrent Stop throw.
         try
         {
-            Interlocked.Exchange(ref _cts, null)?.Cancel();
+            Volatile.Read(ref _cts)?.Cancel();
         }
         catch (ObjectDisposedException)
         {
@@ -581,7 +625,10 @@ public sealed class ChatSession : IAsyncDisposable
         await Task.CompletedTask.ConfigureAwait(false);
     }
 
-    private void RaiseStateChanged() => StateChanged?.Invoke();
+    private void RaiseStateChanged()
+    {
+        if (!_disposed) StateChanged?.Invoke();
+    }
 
     private sealed class ToolProgressReporter(ToolCallPart call, Action notify) : IProgress<ToolProgress>
     {

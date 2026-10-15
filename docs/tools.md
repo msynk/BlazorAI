@@ -96,6 +96,11 @@ public sealed class BudgetPolicy(ICurrentUser user) : IToolApprovalPolicy
 services.AddBlazorAI(ai => ai.UseApprovalPolicy<BudgetPolicy>());
 ```
 
+The policy is registered scoped, replacing the default, so it can depend on per-user services such
+as `ICurrentUser` above. The default policy is scoped too: it remembers "allow always" decisions, and
+on Blazor Server a singleton would carry one user's decision over to every other user. Keep any state
+a custom policy holds per user for the same reason.
+
 While a call waits, the turn is genuinely paused: the tool has not run, the model has not been asked
 again, and cancelling the turn cancels the wait. A policy that throws is treated as requiring
 approval, because failing closed is the only safe direction.

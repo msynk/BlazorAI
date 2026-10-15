@@ -59,7 +59,9 @@ Registration is the boundary, and it is deliberately narrow.
   properties, minus the ones no model should ever set: delegates, `EventCallback`, `RenderFragment`,
   and unmatched-attribute catch-alls. That exclusion is what stops a payload from wiring up handlers
   or injecting attributes.
-- **Unknown properties are discarded**, not passed through, and reported in the bind result.
+- **Unknown properties are ignored**, not passed through. They are not errors and do not make a
+  binding incomplete, since models routinely add a property nobody asked for, but they are listed
+  in the bind result's `IgnoredProperties` for diagnostics.
 - **A value of the wrong shape is skipped**, not thrown. One bad field should not lose the card.
 - **Rendering runs inside an error boundary**, so a component that throws on unexpected input
   degrades to a notice rather than taking the page down.

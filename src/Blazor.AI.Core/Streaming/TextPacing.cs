@@ -7,13 +7,33 @@ namespace Blazor.AI;
 /// <summary>
 /// Settings for evening out bursty text output.
 /// </summary>
+/// <remarks>
+/// Each value is checked as it is set. Whether <see cref="MinCharsPerTick"/> exceeds
+/// <see cref="MaxCharsPerTick"/> can only be judged once both are set, so that is checked when the
+/// settings are handed to <see cref="ChatSessionOptions.Pacing"/> or to
+/// <see cref="AiEventStreamExtensions.Paced"/>.
+/// </remarks>
 public sealed record TextPacingOptions
 {
+    private readonly TimeSpan _interval = TimeSpan.FromMilliseconds(16);
+    private readonly int _minCharsPerTick = 1;
+    private readonly int _maxCharsPerTick = 48;
+
     /// <summary>The default settings: a 16 millisecond tick draining the buffer over 150 milliseconds.</summary>
     public static readonly TextPacingOptions Default = new();
 
     /// <summary>How often to release a chunk. One animation frame by default.</summary>
-    public TimeSpan Interval { get; init; } = TimeSpan.FromMilliseconds(16);
+    /// <exception cref="ArgumentOutOfRangeException">The value is negative.</exception>
+    public TimeSpan Interval
+    {
+        get => _interval;
+        init
+        {
+            // Task.Delay reads minus one millisecond as "forever", which would stall the stream.
+            ArgumentOutOfRangeException.ThrowIfLessThan(value, TimeSpan.Zero);
+            _interval = value;
+        }
+    }
 
     /// <summary>
     /// How long the pacer aims to take to drain whatever is buffered. Larger values look smoother
@@ -21,11 +41,48 @@ public sealed record TextPacingOptions
     /// </summary>
     public TimeSpan TargetDrain { get; init; } = TimeSpan.FromMilliseconds(150);
 
-    /// <summary>The fewest characters to release per tick.</summary>
-    public int MinCharsPerTick { get; init; } = 1;
+    /// <summary>The fewest characters to release per tick. At least one.</summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is less than one.</exception>
+    public int MinCharsPerTick
+    {
+        get => _minCharsPerTick;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(value, 1);
+            _minCharsPerTick = value;
+        }
+    }
 
-    /// <summary>The most characters to release per tick, which caps the smoothing latency.</summary>
-    public int MaxCharsPerTick { get; init; } = 48;
+    /// <summary>
+    /// The most characters to release per tick, which caps the smoothing latency. At least one, and
+    /// no less than <see cref="MinCharsPerTick"/>.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is less than one.</exception>
+    public int MaxCharsPerTick
+    {
+        get => _maxCharsPerTick;
+        init
+        {
+            // Releasing nothing per tick would never drain the buffer.
+            ArgumentOutOfRangeException.ThrowIfLessThan(value, 1);
+            _maxCharsPerTick = value;
+        }
+    }
+
+    /// <summary>Checks the settings that depend on each other.</summary>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <see cref="MinCharsPerTick"/> exceeds <see cref="MaxCharsPerTick"/>.
+    /// </exception>
+    internal void Validate()
+    {
+        if (MinCharsPerTick > MaxCharsPerTick)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(MinCharsPerTick),
+                MinCharsPerTick,
+                $"{nameof(MinCharsPerTick)} ({MinCharsPerTick}) must not exceed {nameof(MaxCharsPerTick)} ({MaxCharsPerTick}).");
+        }
+    }
 }
 
 /// <summary>
@@ -52,14 +109,28 @@ public static class AiEventStreamExtensions
     /// all when the model is slower than the pacer, which is the common case.
     /// </para>
     /// </remarks>
-    public static async IAsyncEnumerable<AiEvent> Paced(
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <see cref="TextPacingOptions.MinCharsPerTick"/> exceeds <see cref="TextPacingOptions.MaxCharsPerTick"/>.
+    /// </exception>
+    public static IAsyncEnumerable<AiEvent> Paced(
         this IAsyncEnumerable<AiEvent> source,
         TextPacingOptions? options = null,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default)
     {
+        // Checked here rather than in the iterator, so a bad setting fails at the call site instead
+        // of on the first read.
         ArgumentNullException.ThrowIfNull(source);
         var settings = options ?? TextPacingOptions.Default;
+        settings.Validate();
 
+        return PacedIterator(source, settings, cancellationToken);
+    }
+
+    private static async IAsyncEnumerable<AiEvent> PacedIterator(
+        IAsyncEnumerable<AiEvent> source,
+        TextPacingOptions settings,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
         var channel = Channel.CreateUnbounded<AiEvent>(new UnboundedChannelOptions
         {
             SingleReader = true,
@@ -129,7 +200,8 @@ public static class AiEventStreamExtensions
 
     private static TextDeltaEvent Take(StringBuilder pending, int count, string? partId, string? messageId)
     {
-        count = Math.Min(count, pending.Length);
+        // At least one character, so the drain loop always makes progress.
+        count = Math.Clamp(count, 1, pending.Length);
 
         // Never split a surrogate pair: each half alone renders as a replacement character.
         if (count > 0 && count < pending.Length && char.IsHighSurrogate(pending[count - 1])) count++;

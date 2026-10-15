@@ -330,6 +330,121 @@ public sealed class ChatSessionControlTests
         Assert.Equal("server", assistant!.FindToolCall("c1")!.Result!.Text);
     }
 
+    [Fact]
+    public async Task UsageAcrossToolRoundTripsIsTheSumOfEachRequestsFinalReport()
+    {
+        var registry = new ToolRegistry();
+        registry.Register(AiTool.Create(
+            new AiToolDefinition("search"),
+            (_, _) => ValueTask.FromResult(ToolOutcome.FromText("found"))));
+
+        var round = 0;
+        var transport = new FakeTransport(_ => round++ == 0
+            ?
+            [
+                new AgentRunStartedEvent("run1"),
+                new UsageUpdatedEvent(new TokenUsage { InputTokens = 100, OutputTokens = 3, Cost = 0.01m }),
+                new ToolCallStartedEvent("c1", "search") { Arguments = System.Text.Json.JsonDocument.Parse("{}").RootElement },
+                new UsageUpdatedEvent(new TokenUsage { InputTokens = 100, OutputTokens = 9, Cost = 0.02m }),
+                new MessageCompletedEvent(FinishReason.ToolCalls),
+            ]
+            :
+            [
+                new UsageUpdatedEvent(new TokenUsage { InputTokens = 130, OutputTokens = 2, CachedInputTokens = 100 }),
+                new TextDeltaEvent("Here it is."),
+                new UsageUpdatedEvent(new TokenUsage { InputTokens = 130, OutputTokens = 6, CachedInputTokens = 100, Cost = 0.005m }),
+                new AgentRunCompletedEvent("run1"),
+                new MessageCompletedEvent(),
+            ]);
+
+        await using var session = new ChatSession(transport, null, Immediate, registry);
+        var assistant = await session.SubmitAsync("go");
+
+        var expected = new TokenUsage { InputTokens = 230, OutputTokens = 15, CachedInputTokens = 100, Cost = 0.025m };
+        Assert.Equal(2, transport.Requests.Count);
+        Assert.Equal(expected, assistant!.Metadata!.Usage);
+        Assert.Equal(expected, session.Conversation.FindRun("run1")!.Usage);
+        Assert.Equal(expected, session.Conversation.TotalUsage);
+    }
+
+    [Fact]
+    public async Task AStopWhileTheTurnIsBeingPreparedIsNotLost()
+    {
+        var transport = new FakeTransport(_ => [new TextDeltaEvent("answer"), new MessageCompletedEvent()]);
+        await using var session = new ChatSession(transport, null, Immediate);
+
+        // The user message is appended after the turn is claimed and before the request is sent:
+        // exactly the window in which a Stop used to find no token source to cancel.
+        session.Conversation.MessageAdded += (_, message) =>
+        {
+            if (message.Role.IsUser) session.Stop();
+        };
+
+        var assistant = await session.SubmitAsync("go");
+
+        Assert.Equal(MessageStatus.Cancelled, assistant!.Status);
+        Assert.Equal(AiErrorKind.Cancelled, session.LastError!.Kind);
+        Assert.Empty(transport.Requests);
+        Assert.False(session.IsGenerating);
+    }
+
+    [Fact]
+    public async Task AStopWithNoTurnInFlightDoesNotCancelTheNextOne()
+    {
+        var transport = new FakeTransport(_ => [new TextDeltaEvent("answer"), new MessageCompletedEvent()]);
+        await using var session = new ChatSession(transport, null, Immediate);
+
+        session.Stop();
+        var assistant = await session.SubmitAsync("go");
+
+        Assert.Equal(MessageStatus.Complete, assistant!.Status);
+        Assert.Equal("answer", assistant.GetText());
+    }
+
+    [Fact]
+    public async Task NoEventIsRaisedAfterDisposal()
+    {
+        var blocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var session = new ChatSession(new BlockingTransport(blocked), null, Immediate);
+
+        var disposed = false;
+        var late = 0;
+        session.StateChanged += () => { if (disposed) late++; };
+        session.TurnCompleted += _ => { if (disposed) late++; };
+        session.ApprovalRequested += _ => { if (disposed) late++; };
+
+        var turn = session.SubmitAsync("go");
+
+        // Once the transport is parked nothing is mid-way through raising an event, so anything
+        // counted from here on was raised by disposal or after it. Cancelling can unwind the turn
+        // synchronously inside DisposeAsync, which is why the flag is set before the call.
+        await blocked.Task;
+        disposed = true;
+        await session.DisposeAsync();
+
+        var assistant = await turn;
+        session.Stop();
+        session.Approve("unknown", ApprovalDecision.Approved);
+
+        Assert.Equal(0, late);
+        Assert.Equal(MessageStatus.Cancelled, assistant!.Status);
+        Assert.False(session.IsGenerating);
+    }
+
+    /// <summary>Streams one delta, then waits for cancellation, signalling once it is waiting.</summary>
+    private sealed class BlockingTransport(TaskCompletionSource blocked) : IAiTransport
+    {
+        public async IAsyncEnumerable<AiEvent> StreamAsync(
+            AiRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            yield return new TextDeltaEvent("partial");
+            blocked.TrySetResult();
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            yield break;
+        }
+    }
+
     private static async Task WaitFor(Func<bool> condition, int timeoutMs = 2000)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
