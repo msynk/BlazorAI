@@ -280,6 +280,10 @@ public sealed class ConversationStreamProcessor
         if (FindToolCall(evt.ToolCallId) is not null) return;
 
         var part = message.AddPart(new ToolCallPart(evt.ToolCallId, evt.ToolName));
+
+        // Attributed to the step that is running, so a timeline can show what each step called.
+        if (CurrentRun?.CurrentStep is { Status: AgentStepStatus.Running } step) step.AddToolCall(evt.ToolCallId);
+
         if (evt.Arguments is { } arguments)
         {
             part.CompleteArguments(arguments);

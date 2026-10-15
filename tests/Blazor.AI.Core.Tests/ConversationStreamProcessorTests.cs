@@ -185,6 +185,29 @@ public sealed class ConversationStreamProcessorTests
     }
 
     [Fact]
+    public void ToolCallsAreRecordedOnTheRunningStep()
+    {
+        var (conversation, processor) = Create();
+        processor.BeginGeneration();
+
+        processor.Apply(new AgentPlanEvent("r1",
+        [
+            new AgentPlanStep("s1", "Search"),
+            new AgentPlanStep("s2", "Summarise"),
+        ]));
+        processor.Apply(new ToolCallStartedEvent("call_0", "search"));
+        processor.Apply(new AgentStepStartedEvent("r1", "s1"));
+        processor.Apply(new ToolCallStartedEvent("call_1", "search"));
+        processor.Apply(new ToolCallStartedEvent("call_2", "search"));
+        processor.Apply(new AgentStepCompletedEvent("r1", "s1"));
+        processor.Apply(new ToolCallStartedEvent("call_3", "search"));
+
+        var run = conversation.FindRun("r1")!;
+        Assert.Equal(["call_1", "call_2"], run.Steps[0].ToolCallIds);
+        Assert.Empty(run.Steps[1].ToolCallIds);
+    }
+
+    [Fact]
     public void PlanRevisionPreservesStateOfSurvivingSteps()
     {
         var (conversation, processor) = Create();
