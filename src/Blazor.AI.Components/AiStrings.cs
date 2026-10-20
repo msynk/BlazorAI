@@ -504,4 +504,9 @@ public class AiStrings
 
     /// <summary>Group heading in the model picker for models with neither a family nor a provider.</summary>
     public virtual string OtherModels => "Other";
+
+    /// <summary>Label of the click-to-load placeholder shown for an image the image policy did not load automatically.</summary>
+    /// <param name="description">The image alt text, or its host when there is none.</param>
+    /// <returns>The label.</returns>
+    public virtual string LoadImage(string description) => $"Load image: {description}";
 }

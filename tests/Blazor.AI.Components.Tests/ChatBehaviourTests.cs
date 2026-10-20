@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Bunit;
+using Microsoft.AspNetCore.Components;
 using Xunit;
 
 namespace Blazor.AI.Components.Tests;
@@ -14,6 +15,7 @@ public class ChatBehaviourTests : AiTestBase
     [Fact]
     public async Task OnlyTheNewestReplyOffersRegeneration()
     {
+        SetRendererInfo(new RendererInfo("Server", isInteractive: true));
         var session = new ChatSession(new SilentTransport(), options: new ChatSessionOptions { Pacing = null });
         session.Conversation.AddMessage(AiRole.User, "one");
         session.Conversation.AddMessage(AiRole.Assistant, "first reply");
@@ -34,6 +36,7 @@ public class ChatBehaviourTests : AiTestBase
     [Fact]
     public async Task FeedbackReachesTheHostWithTheMessage()
     {
+        SetRendererInfo(new RendererInfo("Server", isInteractive: true));
         var session = new ChatSession(new SilentTransport(), options: new ChatSessionOptions { Pacing = null });
         session.Conversation.AddMessage(AiRole.User, "q");
         var reply = session.Conversation.AddMessage(AiRole.Assistant, "a");
@@ -74,7 +77,7 @@ public class ChatBehaviourTests : AiTestBase
 
         Assert.Contains("dotnet build", cut.Find("code").TextContent);
         Assert.DoesNotContain("[1]", cut.Find("code").TextContent);
-        Assert.Single(cut.FindAll(".bai-citation"));
+        Assert.Single(cut.FindAll(".bai-cite"));
     }
 
     [Fact]

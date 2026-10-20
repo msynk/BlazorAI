@@ -143,7 +143,7 @@ public sealed class MarkdownHooksTests : AiTestBase
 
         Assert.DoesNotContain("<img", component.Markup, StringComparison.Ordinal);
         var placeholder = component.Find("button.bai-image-placeholder");
-        Assert.Equal("a cat", placeholder.TextContent.Trim());
+        Assert.Equal("Load image: a cat", placeholder.TextContent.Trim());
 
         placeholder.Click();
 

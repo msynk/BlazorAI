@@ -316,7 +316,7 @@
 
             case AiImageDecision.AskFirst:
                 <button type="button" class="bai-image-placeholder" title="@source" @onclick="() => _loadedImages.Add(source)">
-                    @(string.IsNullOrWhiteSpace(image.Alt) ? HostOf(source) : image.Alt)
+                    @Strings.LoadImage(string.IsNullOrWhiteSpace(image.Alt) ? HostOf(source) : image.Alt)
                 </button>
                 break;
 
