@@ -56,7 +56,7 @@ public sealed class Conversation : IConversation
     public IReadOnlyDictionary<string, AgentRun> Runs => _runs;
 
     /// <inheritdoc />
-    public DateTimeOffset CreatedAt { get; init; }
+    public DateTimeOffset CreatedAt { get; private set; }
 
     /// <inheritdoc />
     public DateTimeOffset UpdatedAt { get; private set; }
@@ -144,6 +144,7 @@ public sealed class Conversation : IConversation
         }
 
         Detach(message);
+        PruneOrphans();
         Touch();
         MessageRemoved?.Invoke(this, message);
         return true;
@@ -191,9 +192,47 @@ public sealed class Conversation : IConversation
             MessageRemoved?.Invoke(this, message);
         }
 
+        PruneOrphans();
         Touch();
         removed.Reverse();
         return removed;
+    }
+
+    /// <summary>
+    /// Drops artifacts and runs that no remaining message references, so a regenerated or edited
+    /// thread does not keep showing output from the turns it discarded.
+    /// </summary>
+    private void PruneOrphans()
+    {
+        var messages = _messages;
+
+        if (!_artifacts.IsEmpty)
+        {
+            var referenced = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var message in messages)
+            {
+                foreach (var part in message.PartsOf<ArtifactPart>()) referenced.Add(part.ArtifactId);
+            }
+
+            foreach (var id in _artifacts.Keys.Where(id => !referenced.Contains(id)).ToArray())
+            {
+                if (_artifacts.TryRemove(id, out var artifact)) artifact.Changed -= OnArtifactChanged;
+            }
+        }
+
+        if (!_runs.IsEmpty)
+        {
+            var referenced = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var message in messages)
+            {
+                if (message.Run is { } run) referenced.Add(run.RunId);
+            }
+
+            foreach (var id in _runs.Keys.Where(id => !referenced.Contains(id)).ToArray())
+            {
+                if (_runs.TryRemove(id, out var run)) run.Changed -= OnRunChanged;
+            }
+        }
     }
 
     /// <summary>Removes every message.</summary>
@@ -208,6 +247,11 @@ public sealed class Conversation : IConversation
 
         foreach (var message in removed) Detach(message);
         foreach (var message in removed) MessageRemoved?.Invoke(this, message);
+
+        foreach (var artifact in _artifacts.Values) artifact.Changed -= OnArtifactChanged;
+        foreach (var run in _runs.Values) run.Changed -= OnRunChanged;
+        _artifacts.Clear();
+        _runs.Clear();
         Touch();
     }
 
@@ -266,6 +310,25 @@ public sealed class Conversation : IConversation
         var preview = LastMessage?.GetText();
         if (preview is { Length: > 140 }) preview = string.Concat(preview.AsSpan(0, 140), "...");
         return new ConversationSummary(ConversationId, Title, UpdatedAt, preview, _messages.Length);
+    }
+
+    /// <summary>Restores persisted timestamps. Used by the conversation serializer.</summary>
+    internal void RestoreTimestamps(DateTimeOffset createdAt, DateTimeOffset updatedAt)
+    {
+        CreatedAt = createdAt;
+        UpdatedAt = updatedAt;
+    }
+
+    /// <summary>Adds an already-built artifact, for example one restored from a snapshot.</summary>
+    internal void AttachArtifact(Artifact artifact)
+    {
+        if (_artifacts.TryAdd(artifact.ArtifactId, artifact)) artifact.Changed += OnArtifactChanged;
+    }
+
+    /// <summary>Adds an already-built run, for example one restored from a snapshot.</summary>
+    internal void AttachRun(AgentRun run)
+    {
+        if (_runs.TryAdd(run.RunId, run)) run.Changed += OnRunChanged;
     }
 
     private void Attach(AiMessage message)

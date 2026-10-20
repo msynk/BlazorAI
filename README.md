@@ -105,6 +105,10 @@ refuses everything else, and `AiForm` built from a JSON Schema with real validat
 
 **Operations** — `TokenUsageView`, `ContextMeter`, cost estimation, throughput, latency.
 
+**Persistence** — `IConversationStore` plus `ConversationSerializer`, which round-trips a whole
+conversation (parts, attachments, citations, artifact history, agent runs) through a stable JSON
+snapshot.
+
 ## Documentation
 
 | Guide | Covers |

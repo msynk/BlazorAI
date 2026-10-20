@@ -66,7 +66,10 @@ public static class GenerativePropsBinder
     /// Binds a JSON object onto the parameters of a registered component.
     /// </summary>
     /// <param name="component">The registration, which defines what may be set.</param>
-    /// <param name="props">The model-produced properties. Anything but an object binds nothing.</param>
+    /// <param name="props">
+    /// The model-produced properties. Anything but an object binds nothing, and leaves every
+    /// required property reported as missing.
+    /// </param>
     /// <returns>The parameters to render with, and any problems found.</returns>
     public static GenerativeBindResult Bind(GenerativeComponent component, JsonElement? props)
     {
@@ -76,12 +79,9 @@ public static class GenerativePropsBinder
         var errors = new List<string>();
         var ignored = new List<string>();
 
-        if (props is not { ValueKind: JsonValueKind.Object } payload)
-        {
-            return new GenerativeBindResult(parameters, errors);
-        }
-
-        foreach (var property in payload.EnumerateObject())
+        // A payload that is not an object binds nothing, but the required check still runs: a
+        // component whose props never arrived is as incomplete as one whose props left a field out.
+        foreach (var property in props is { ValueKind: JsonValueKind.Object } payload ? payload.EnumerateObject() : [])
         {
             var declared = component.FindProperty(property.Name);
             if (declared is null)

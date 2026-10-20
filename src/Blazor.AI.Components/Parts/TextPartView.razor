@@ -60,7 +60,9 @@
         var anchored = message.Citations
             .Where(c => c.IsAnchored && (c.PartId is null || c.PartId == part.PartId))
             .Where(c => c.EndIndex is { } end && end <= text.Length)
+            .Where(c => !IsInsideCode(text, c.EndIndex!.Value))
             .OrderByDescending(c => c.EndIndex)
+            .ThenBy(c => c.Number)
             .ToArray();
 
         if (anchored.Length == 0) return text;
@@ -74,5 +76,35 @@
         }
 
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// A marker dropped inside a code span or fenced block would be rendered literally and could
+    /// break the code, so citations whose span ends inside code are shown in the source list only.
+    /// </summary>
+    internal static bool IsInsideCode(string text, int index)
+    {
+        var fenceOpen = false;
+        var inlineOpen = false;
+        var i = 0;
+        while (i < index && i < text.Length)
+        {
+            if (text[i] == '`')
+            {
+                var run = 0;
+                while (i + run < text.Length && text[i + run] == '`') run++;
+                var atLineStart = i == 0 || text[i - 1] == '\n';
+                if (run >= 3 && atLineStart) fenceOpen = !fenceOpen;
+                else if (!fenceOpen) inlineOpen = !inlineOpen;
+                i += run;
+                continue;
+            }
+
+            // A code span cannot cross a blank line; an unmatched backtick closes at the paragraph end.
+            if (text[i] == '\n' && inlineOpen && i + 1 < text.Length && text[i + 1] == '\n') inlineOpen = false;
+            i++;
+        }
+
+        return fenceOpen || inlineOpen;
     }
 }

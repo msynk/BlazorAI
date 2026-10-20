@@ -8,15 +8,19 @@ namespace Blazor.AI.Markdown;
 /// <remarks>
 /// <para>
 /// A CommonMark subset with the GitHub-flavoured extensions that models actually emit: tables, task
-/// lists, strikethrough, autolinks, and mathematics. It is not a conformance-complete CommonMark
-/// implementation, and it does not try to be: link reference definitions and HTML blocks matter far
-/// less here than being able to parse a half-written response forty times a second without
-/// allocating a new tree each time.
+/// lists, strikethrough, autolinks, footnotes, and mathematics. It is not a conformance-complete
+/// CommonMark implementation, and it does not try to be: the priority is parsing a half-written
+/// response forty times a second without allocating a new tree each time.
 /// </para>
 /// <para>
 /// Every block records whether the source ended inside it, which is what makes streaming look
 /// settled rather than jittery. See <see cref="IncrementalMarkdownParser"/> for the streaming entry
 /// point.
+/// </para>
+/// <para>
+/// Link reference definitions and footnote definitions may follow the text that uses them, so a
+/// document that contains any is parsed twice: once to collect the definitions and once to resolve
+/// the references. Documents without definitions, which is nearly all of them, are parsed once.
 /// </para>
 /// </remarks>
 public static class MarkdownParser
@@ -32,13 +36,8 @@ public static class MarkdownParser
     /// <returns>The document.</returns>
     public static MarkdownDocument Parse(string? markdown, MarkdownOptions? options = null, bool isComplete = true)
     {
-        var document = new MarkdownDocument();
-        if (string.IsNullOrEmpty(markdown)) return document;
-
-        var settings = options ?? MarkdownOptions.Default;
-        var lines = SplitLines(markdown);
-        ParseBlocks(lines, 0, lines.Count, document.Blocks, settings, isComplete, 0);
-        return document;
+        if (string.IsNullOrEmpty(markdown)) return new MarkdownDocument();
+        return Parse(markdown, options ?? MarkdownOptions.Default, isComplete, null, null, out _);
     }
 
     /// <summary>
@@ -50,18 +49,60 @@ public static class MarkdownParser
     /// <param name="isComplete"><see langword="false"/> when more source is expected.</param>
     /// <param name="blockStarts">
     /// Receives, for each top-level block in order, the offset in <paramref name="markdown"/> of the
-    /// line it starts on.
+    /// line it starts on. May be <see langword="null"/>.
+    /// </param>
+    /// <param name="usedHeadingIds">
+    /// Heading identifiers already taken by text before this source, so the ones assigned here do
+    /// not collide with them.
+    /// </param>
+    /// <param name="sawDefinitions">
+    /// Set when the source contains a link reference or footnote definition, which means text
+    /// anywhere in the document may depend on text anywhere else.
     /// </param>
     /// <returns>The document.</returns>
-    internal static MarkdownDocument Parse(string markdown, MarkdownOptions options, bool isComplete, List<int> blockStarts)
+    internal static MarkdownDocument Parse(
+        string markdown,
+        MarkdownOptions options,
+        bool isComplete,
+        List<int>? blockStarts,
+        IEnumerable<string>? usedHeadingIds,
+        out bool sawDefinitions)
     {
         var document = new MarkdownDocument();
+        sawDefinitions = false;
         if (markdown.Length == 0) return document;
 
         var lines = SplitLines(markdown);
-        ParseBlocks(lines, 0, lines.Count, document.Blocks, options, isComplete, 0, blockStarts);
+        var context = new ParseContext(options);
+        if (usedHeadingIds is not null) context.HeadingIds.UnionWith(usedHeadingIds);
+        ParseBlocks(lines, 0, lines.Count, document.Blocks, context, isComplete, 0, blockStarts);
 
-        // Convert line indices to offsets. Both lists ascend, so one pass over the text does it.
+        if (context.SawDefinitions)
+        {
+            // A definition may follow the text that cites it, so the first pass could only collect.
+            // The second one knows every definition from the start.
+            sawDefinitions = true;
+            var resolving = new ParseContext(options)
+            {
+                LinkDefinitions = context.LinkDefinitions,
+                FootnoteDefinitions = context.FootnoteDefinitions,
+                ResolvesReferences = true,
+            };
+            if (usedHeadingIds is not null) resolving.HeadingIds.UnionWith(usedHeadingIds);
+
+            document = new MarkdownDocument();
+            blockStarts?.Clear();
+            ParseBlocks(lines, 0, lines.Count, document.Blocks, resolving, isComplete, 0, blockStarts);
+            ResolveFootnotes(document, resolving);
+        }
+
+        if (blockStarts is not null) ConvertLinesToOffsets(markdown, blockStarts);
+        return document;
+    }
+
+    // Convert line indices to offsets. Both lists ascend, so one pass over the text does it.
+    private static void ConvertLinesToOffsets(string markdown, List<int> blockStarts)
+    {
         var line = 0;
         var offset = 0;
         for (var i = 0; i < blockStarts.Count; i++)
@@ -69,13 +110,7 @@ public static class MarkdownParser
             for (; line < blockStarts[i]; line++) offset = markdown.IndexOf('\n', offset) + 1;
             blockStarts[i] = offset;
         }
-
-        return document;
     }
-
-    // Quotes and lists recurse. A line of ten thousand '>' characters must not overflow the stack,
-    // which on Blazor Server takes the whole process down with it.
-    private const int MaxNesting = 32;
 
     internal static List<string> SplitLines(string text)
     {
@@ -99,11 +134,12 @@ public static class MarkdownParser
         int start,
         int end,
         List<MarkdownBlock> output,
-        MarkdownOptions options,
+        ParseContext context,
         bool isComplete,
         int depth,
         List<int>? blockStarts = null)
     {
+        var options = context.Options;
         var index = start;
 
         while (index < end)
@@ -116,18 +152,40 @@ public static class MarkdownParser
                 continue;
             }
 
-            // Every pass from here adds exactly one block, starting on this line.
+            // Every pass from here adds at most one block, starting on this line. A definition adds
+            // none, and takes its start back out so the two lists stay aligned.
+            var count = output.Count;
             blockStarts?.Add(index);
 
-            if (TryFencedCode(lines, ref index, end, output, options, isComplete)) continue;
-            if (TryThematicBreak(line, ref index, output)) continue;
-            if (TryHeading(line, ref index, output, options)) continue;
-            if (options.Math && TryMathBlock(lines, ref index, end, output, isComplete)) continue;
-            if (depth < MaxNesting && TryQuote(lines, ref index, end, output, options, isComplete, depth)) continue;
-            if (depth < MaxNesting && TryList(lines, ref index, end, output, options, isComplete, depth)) continue;
-            if (options.Tables && TryTable(lines, ref index, end, output, options, isComplete)) continue;
-            if (!options.AllowRawHtml || !TryHtmlBlock(lines, ref index, end, output)) ParseParagraph(lines, ref index, end, output, options, isComplete);
+            ParseBlock(lines, ref index, end, output, context, isComplete, depth, options);
+
+            if (blockStarts is not null && output.Count == count) blockStarts.RemoveAt(blockStarts.Count - 1);
         }
+    }
+
+    private static void ParseBlock(
+        List<string> lines,
+        ref int index,
+        int end,
+        List<MarkdownBlock> output,
+        ParseContext context,
+        bool isComplete,
+        int depth,
+        MarkdownOptions options)
+    {
+        var line = lines[index];
+
+        if (IndentOf(line) >= 4 && TryIndentedCode(lines, ref index, end, output, isComplete)) return;
+        if (TryFencedCode(lines, ref index, end, output, isComplete)) return;
+        if (TryThematicBreak(line, ref index, output)) return;
+        if (TryHeading(line, ref index, output, context)) return;
+        if (options.Math && TryMathBlock(lines, ref index, end, output, isComplete)) return;
+        if (depth < options.MaxNestingDepth && TryQuote(lines, ref index, end, output, context, isComplete, depth)) return;
+        if (depth < options.MaxNestingDepth && TryList(lines, ref index, end, output, context, isComplete, depth)) return;
+        if (options.Tables && TryTable(lines, ref index, end, output, context, isComplete)) return;
+        if (options.AllowRawHtml && TryHtmlBlock(lines, ref index, end, output)) return;
+        if (TryDefinition(lines, ref index, end, context)) return;
+        ParseParagraph(lines, ref index, end, output, context, isComplete);
     }
 
     private static bool IsBlank(string line)
@@ -138,6 +196,12 @@ public static class MarkdownParser
         }
 
         return true;
+    }
+
+    private static int NextNonBlank(List<string> lines, int index, int end)
+    {
+        while (index < end && IsBlank(lines[index])) index++;
+        return index;
     }
 
     private static int IndentOf(string line)
@@ -180,7 +244,7 @@ public static class MarkdownParser
         return count >= 3;
     }
 
-    private static bool TryHeading(string line, ref int index, List<MarkdownBlock> output, MarkdownOptions options)
+    private static bool TryHeading(string line, ref int index, List<MarkdownBlock> output, ParseContext context)
     {
         var trimmed = line.TrimStart();
         if (trimmed.Length == 0 || trimmed[0] != '#') return false;
@@ -191,12 +255,17 @@ public static class MarkdownParser
         if (level < trimmed.Length && trimmed[level] is not (' ' or '\t')) return false;
 
         var text = StripClosingSequence(trimmed[level..].Trim());
-        var heading = new HeadingBlock(level);
-        heading.Inlines.AddRange(InlineParser.Parse(text, options, isComplete: true));
-        if (options.HeadingIds) heading.Id = Slug(text);
-        output.Add(heading);
+        output.Add(CreateHeading(level, text, context));
         index++;
         return true;
+    }
+
+    private static HeadingBlock CreateHeading(int level, string text, ParseContext context)
+    {
+        var heading = new HeadingBlock(level);
+        heading.Inlines.AddRange(InlineParser.Parse(text, context.Options, isComplete: true, context));
+        if (context.Options.HeadingIds) heading.Id = context.ClaimHeadingId(text);
+        return heading;
     }
 
     // The closing run of '#' only counts when a space separates it from the text, or "## Using C#"
@@ -223,12 +292,51 @@ public static class MarkdownParser
         return builder.ToString().Trim('-');
     }
 
+    // Four columns of indentation open a code block, as in CommonMark. It cannot interrupt a
+    // paragraph, which ParseParagraph guarantees by continuing through indented lines.
+    private static bool TryIndentedCode(List<string> lines, ref int index, int end, List<MarkdownBlock> output, bool isComplete)
+    {
+        var cursor = index;
+        var lastContent = index;
+
+        while (cursor < end)
+        {
+            var line = lines[cursor];
+            if (IsBlank(line))
+            {
+                cursor++;
+                continue;
+            }
+
+            if (IndentOf(line) < 4) break;
+            cursor++;
+            lastContent = cursor;
+        }
+
+        var body = new StringBuilder();
+        for (var i = index; i < lastContent; i++)
+        {
+            if (i > index) body.Append('\n');
+            body.Append(StripIndent(lines[i], 4));
+        }
+
+        output.Add(new CodeBlock
+        {
+            IsFenced = false,
+            Code = body.ToString(),
+            IsOpen = !isComplete && cursor >= end,
+        });
+
+        // Trailing blank lines belong to whatever follows.
+        index = lastContent;
+        return true;
+    }
+
     private static bool TryFencedCode(
         List<string> lines,
         ref int index,
         int end,
         List<MarkdownBlock> output,
-        MarkdownOptions options,
         bool isComplete)
     {
         var line = lines[index];
@@ -259,6 +367,7 @@ public static class MarkdownParser
 
         while (cursor < end)
         {
+            // A closing fence may carry trailing whitespace, as CommonMark allows.
             var candidate = lines[cursor].Trim();
             if (candidate.Length >= fenceLength && candidate.All(c => c == fence))
             {
@@ -335,7 +444,7 @@ public static class MarkdownParser
         ref int index,
         int end,
         List<MarkdownBlock> output,
-        MarkdownOptions options,
+        ParseContext context,
         bool isComplete,
         int depth)
     {
@@ -344,14 +453,14 @@ public static class MarkdownParser
         var inner = new List<string>();
         var cursor = index;
 
-        while (cursor < end && (IsQuoteLine(lines[cursor]) || (inner.Count > 0 && IsLazyQuoteLine(lines, cursor, end, options))))
+        while (cursor < end && (IsQuoteLine(lines[cursor]) || (inner.Count > 0 && IsLazyQuoteLine(lines, cursor, end, context))))
         {
             inner.Add(StripQuoteMarker(lines[cursor]));
             cursor++;
         }
 
         var quote = new QuoteBlock();
-        ParseBlocks(inner, 0, inner.Count, quote.Blocks, options, isComplete || cursor < end, depth + 1);
+        ParseBlocks(inner, 0, inner.Count, quote.Blocks, context, isComplete || cursor < end, depth + 1);
         quote.IsOpen = !isComplete && cursor >= end;
         output.Add(quote);
         index = cursor;
@@ -359,8 +468,8 @@ public static class MarkdownParser
     }
 
     // Only paragraph text continues a quote lazily; a heading, fence, or list after it starts anew.
-    private static bool IsLazyQuoteLine(List<string> lines, int index, int end, MarkdownOptions options) =>
-        !IsBlank(lines[index]) && !StartsNewBlock(lines, index, end, options);
+    private static bool IsLazyQuoteLine(List<string> lines, int index, int end, ParseContext context) =>
+        !IsBlank(lines[index]) && !StartsNewBlock(lines, index, end, context);
 
     private static bool IsQuoteLine(string line)
     {
@@ -408,7 +517,7 @@ public static class MarkdownParser
         ref int index,
         int end,
         List<MarkdownBlock> output,
-        MarkdownOptions options,
+        ParseContext context,
         bool isComplete,
         int depth)
     {
@@ -422,24 +531,22 @@ public static class MarkdownParser
         {
             if (IsBlank(lines[cursor]))
             {
-                if (cursor + 1 < end && TryReadListMarker(lines[cursor + 1]) is { } next && next.Continues(first)) sawBlank = true;
-                else if (cursor + 1 < end && IndentOf(lines[cursor + 1]) >= first.ContentIndent) sawBlank = true;
-                else break;
+                // A blank line continues the list only when another item follows. Anything else
+                // the previous item refused ends the list, and the blank line is left for the block
+                // after it rather than being swallowed.
+                var next = NextNonBlank(lines, cursor, end);
+                if (next < end && TryReadListMarker(lines[next]) is { } following && following.Continues(first))
+                {
+                    sawBlank = true;
+                    cursor = next;
+                    continue;
+                }
 
-                cursor++;
-                continue;
+                break;
             }
 
             if (IsThematicBreak(lines[cursor])) break;
-
-            if (TryReadListMarker(lines[cursor]) is not { } marker)
-            {
-                if (list.Items.Count == 0 || IndentOf(lines[cursor]) < first.ContentIndent) break;
-                cursor++;
-                continue;
-            }
-
-            if (!marker.Continues(first)) break;
+            if (TryReadListMarker(lines[cursor]) is not { } marker || !marker.Continues(first)) break;
 
             var itemStart = cursor;
             cursor++;
@@ -447,17 +554,32 @@ public static class MarkdownParser
             {
                 if (IsBlank(lines[cursor]))
                 {
-                    if (cursor + 1 < end && IndentOf(lines[cursor + 1]) >= marker.ContentIndent) { cursor++; continue; }
+                    var next = NextNonBlank(lines, cursor, end);
+                    if (next < end && IndentOf(lines[next]) >= marker.ContentIndent)
+                    {
+                        cursor = next;
+                        continue;
+                    }
+
                     break;
                 }
 
-                if (TryReadListMarker(lines[cursor]) is not null && IndentOf(lines[cursor]) < marker.ContentIndent) break;
-                if (IndentOf(lines[cursor]) < marker.ContentIndent && !IsLazyContinuation(lines[cursor])) break;
+                if (IndentOf(lines[cursor]) >= marker.ContentIndent)
+                {
+                    cursor++;
+                    continue;
+                }
+
+                // A line short of the content indent continues the item only as lazy paragraph
+                // text. One that starts any block, a rule or a table or display math included,
+                // ends the item instead of being pulled into it.
+                if (TryReadListMarker(lines[cursor]) is not null) break;
+                if (StartsNewBlock(lines, cursor, end, context)) break;
                 cursor++;
             }
 
             // Only the item the source ends inside can still grow.
-            list.Items.Add(BuildItem(lines, itemStart, cursor, marker, options, isComplete || cursor < end, depth));
+            list.Items.Add(BuildItem(lines, itemStart, cursor, marker, context, isComplete || cursor < end, depth));
         }
 
         list.IsLoose = sawBlank;
@@ -467,16 +589,12 @@ public static class MarkdownParser
         return true;
     }
 
-    private static bool IsLazyContinuation(string line) =>
-        !IsBlank(line) && TryReadListMarker(line) is null && !IsThematicBreak(line)
-        && line.TrimStart()[0] is not ('#' or '>' or '`' or '~');
-
     private static ListItemBlock BuildItem(
         List<string> lines,
         int start,
         int end,
         ListMarker marker,
-        MarkdownOptions options,
+        ParseContext context,
         bool isComplete,
         int depth)
     {
@@ -488,11 +606,12 @@ public static class MarkdownParser
             var line = lines[i];
             if (i == start)
             {
+                // The marker's content starts after the first space or tab, so "-\titem" keeps "item".
                 var trimmed = line.TrimStart();
                 var offset = trimmed.IndexOfAny([' ', '\t']);
                 line = offset < 0 ? string.Empty : trimmed[(offset + 1)..];
 
-                if (options.TaskLists && line.Length >= 3 && line[0] == '[' && line[2] == ']')
+                if (context.Options.TaskLists && line.Length >= 3 && line[0] == '[' && line[2] == ']')
                 {
                     var state = char.ToLowerInvariant(line[1]);
                     if (state is ' ' or 'x')
@@ -510,7 +629,7 @@ public static class MarkdownParser
             body.Add(line);
         }
 
-        ParseBlocks(body, 0, body.Count, item.Blocks, options, isComplete, depth + 1);
+        ParseBlocks(body, 0, body.Count, item.Blocks, context, isComplete, depth + 1);
         return item;
     }
 
@@ -542,7 +661,7 @@ public static class MarkdownParser
         ref int index,
         int end,
         List<MarkdownBlock> output,
-        MarkdownOptions options,
+        ParseContext context,
         bool isComplete)
     {
         if (index + 1 >= end) return false;
@@ -552,9 +671,10 @@ public static class MarkdownParser
         var header = SplitRow(lines[index]);
         if (header.Count == 0) return false;
 
+        var options = context.Options;
         var table = new TableBlock();
         table.Alignments.AddRange(alignments);
-        foreach (var cell in header) table.Header.Add(InlineParser.Parse(cell, options, isComplete: true));
+        foreach (var cell in header) table.Header.Add(InlineParser.Parse(cell, options, isComplete: true, context));
 
         while (table.Alignments.Count < table.Header.Count) table.Alignments.Add(ColumnAlignment.None);
 
@@ -564,7 +684,7 @@ public static class MarkdownParser
             var cells = SplitRow(lines[cursor]);
             var row = new List<List<MarkdownInline>>(cells.Count);
             var lastLine = cursor == end - 1;
-            foreach (var cell in cells) row.Add(InlineParser.Parse(cell, options, isComplete || !lastLine));
+            foreach (var cell in cells) row.Add(InlineParser.Parse(cell, options, isComplete || !lastLine, context));
             table.Rows.Add(row);
             cursor++;
         }
@@ -637,9 +757,7 @@ public static class MarkdownParser
 
     private static bool TryHtmlBlock(List<string> lines, ref int index, int end, List<MarkdownBlock> output)
     {
-        var trimmed = lines[index].TrimStart();
-        if (!trimmed.StartsWith('<') || trimmed.Length < 2) return false;
-        if (!char.IsLetter(trimmed[1]) && trimmed[1] is not ('/' or '!')) return false;
+        if (!IsHtmlBlockStart(lines[index].TrimStart(), interruptingParagraph: false)) return false;
 
         var body = new StringBuilder();
         var cursor = index;
@@ -655,14 +773,216 @@ public static class MarkdownParser
         return true;
     }
 
+    // Tags that may start an HTML block in the middle of a paragraph, from CommonMark's list of
+    // block-level names. A span or a bold tag after a line of text continues that text instead.
+    private static readonly HashSet<string> BlockLevelTags = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "address", "article", "aside", "blockquote", "body", "center", "details", "dialog", "dir", "div",
+        "dl", "dd", "dt", "fieldset", "figcaption", "figure", "footer", "form", "frame", "frameset",
+        "h1", "h2", "h3", "h4", "h5", "h6", "head", "header", "hr", "html", "iframe", "legend", "li",
+        "main", "menu", "nav", "ol", "p", "pre", "script", "section", "style", "summary", "table",
+        "tbody", "td", "tfoot", "th", "thead", "title", "tr", "ul",
+    };
+
+    // A line opens an HTML block when it starts with something that is actually a tag: a comment,
+    // a declaration, or a name made of letters. A bare "<" or "<3" is text.
+    private static bool IsHtmlBlockStart(string trimmed, bool interruptingParagraph)
+    {
+        if (trimmed.Length < 3 || trimmed[0] != '<') return false;
+        if (trimmed.StartsWith("<!--", StringComparison.Ordinal)) return true;
+        if (trimmed[1] == '!' && !interruptingParagraph) return char.IsAsciiLetter(trimmed[2]) || trimmed[2] == '[';
+
+        var i = 1;
+        if (trimmed[i] == '/') i++;
+        var nameStart = i;
+        if (i >= trimmed.Length || !char.IsAsciiLetter(trimmed[i])) return false;
+        while (i < trimmed.Length && (char.IsAsciiLetterOrDigit(trimmed[i]) || trimmed[i] == '-')) i++;
+        if (i < trimmed.Length && trimmed[i] is not (' ' or '\t' or '>' or '/')) return false;
+
+        return !interruptingParagraph || BlockLevelTags.Contains(trimmed[nameStart..i]);
+    }
+
+    /// <summary>
+    /// Reads a link reference definition (<c>[label]: url "title"</c>) or a footnote definition
+    /// (<c>[^label]: text</c>) and records it on the context without adding a block.
+    /// </summary>
+    private static bool TryDefinition(List<string> lines, ref int index, int end, ParseContext context)
+    {
+        var line = lines[index];
+        if (IndentOf(line) >= 4) return false;
+
+        var trimmed = line.TrimStart();
+        if (trimmed.Length < 4 || trimmed[0] != '[') return false;
+
+        var close = trimmed.IndexOf(']', 1);
+        if (close < 0 || close > 1000 || close + 1 >= trimmed.Length || trimmed[close + 1] != ':') return false;
+
+        var label = trimmed.AsSpan(1, close - 1);
+        if (label.IsWhiteSpace() || label.Contains('[')) return false;
+
+        if (label[0] == '^')
+        {
+            if (!context.Options.Footnotes || label.Length < 2 || label[1..].ContainsAny(" \t")) return false;
+            ReadFootnoteDefinition(lines, ref index, end, context, label[1..].ToString(), trimmed[(close + 2)..]);
+            return true;
+        }
+
+        if (!TryReadLinkDefinitionTail(trimmed.AsSpan(close + 2), out var url, out var title)) return false;
+
+        (context.LinkDefinitions ??= new(StringComparer.Ordinal)).TryAdd(ParseContext.NormalizeLabel(label), new LinkReferenceDefinition(url, title));
+        index++;
+        return true;
+    }
+
+    // The part after "[label]:": whitespace, a destination (angle-bracketed or a run of non-space
+    // characters), and an optional quoted title, all on the one line.
+    private static bool TryReadLinkDefinitionTail(ReadOnlySpan<char> tail, out string url, out string? title)
+    {
+        url = string.Empty;
+        title = null;
+
+        tail = tail.Trim();
+        if (tail.Length == 0) return false;
+
+        int destinationEnd;
+        if (tail[0] == '<')
+        {
+            destinationEnd = tail.IndexOf('>');
+            if (destinationEnd < 0 || tail[1..destinationEnd].Contains('<')) return false;
+            url = tail[1..destinationEnd].ToString();
+            destinationEnd++;
+        }
+        else
+        {
+            destinationEnd = 0;
+            while (destinationEnd < tail.Length && !char.IsWhiteSpace(tail[destinationEnd])) destinationEnd++;
+            url = tail[..destinationEnd].ToString();
+        }
+
+        var rest = tail[destinationEnd..];
+        if (rest.Length == 0) return true;
+        if (!char.IsWhiteSpace(rest[0])) return false;
+
+        rest = rest.Trim();
+        if (rest.Length < 2) return false;
+
+        var closer = rest[0] switch { '"' => '"', '\'' => '\'', '(' => ')', _ => '\0' };
+        if (closer == '\0' || rest[^1] != closer) return false;
+
+        title = rest[1..^1].ToString();
+        return true;
+    }
+
+    // A footnote's text is the rest of its line and every following line indented four columns,
+    // plus lazy paragraph continuation lines, as GitHub reads them.
+    private static void ReadFootnoteDefinition(List<string> lines, ref int index, int end, ParseContext context, string label, string firstLine)
+    {
+        var body = new List<string> { firstLine.Trim() };
+        var cursor = index + 1;
+
+        while (cursor < end)
+        {
+            var line = lines[cursor];
+            if (IsBlank(line))
+            {
+                var next = NextNonBlank(lines, cursor, end);
+                if (next >= end || IndentOf(lines[next]) < 4) break;
+                for (; cursor < next; cursor++) body.Add(string.Empty);
+                continue;
+            }
+
+            if (IndentOf(line) >= 4) body.Add(StripIndent(line, 4));
+            else if (!IsBlank(body[^1]) && !StartsNewBlock(lines, cursor, end, context) && !LooksLikeDefinition(line)) body.Add(line);
+            else break;
+
+            cursor++;
+        }
+
+        (context.FootnoteDefinitions ??= new(StringComparer.Ordinal)).TryAdd(ParseContext.NormalizeLabel(label), body);
+        index = cursor;
+    }
+
+    private static bool LooksLikeDefinition(string line)
+    {
+        var trimmed = line.TrimStart();
+        if (trimmed.Length < 4 || trimmed[0] != '[') return false;
+        var close = trimmed.IndexOf(']', 1);
+        return close > 1 && close + 1 < trimmed.Length && trimmed[close + 1] == ':';
+    }
+
+    /// <summary>
+    /// Numbers footnote references in the order they are first cited, lists the footnotes they
+    /// cite on the document, and parses each footnote's text.
+    /// </summary>
+    private static void ResolveFootnotes(MarkdownDocument document, ParseContext context)
+    {
+        if (context.FootnoteDefinitions is null) return;
+
+        var byLabel = new Dictionary<string, FootnoteBlock>(StringComparer.Ordinal);
+        VisitBlocks(document.Blocks);
+
+        // A footnote may cite another, so the list can grow while it is being walked.
+        for (var i = 0; i < document.Footnotes.Count; i++)
+        {
+            var footnote = document.Footnotes[i];
+            var body = context.FootnoteDefinitions[ParseContext.NormalizeLabel(footnote.Label)];
+            ParseBlocks(body, 0, body.Count, footnote.Blocks, context, isComplete: true, depth: 1);
+            VisitBlocks(footnote.Blocks);
+        }
+
+        void VisitBlocks(List<MarkdownBlock> blocks)
+        {
+            foreach (var block in blocks)
+            {
+                switch (block)
+                {
+                    case ParagraphBlock p: VisitInlines(p.Inlines); break;
+                    case HeadingBlock h: VisitInlines(h.Inlines); break;
+                    case QuoteBlock q: VisitBlocks(q.Blocks); break;
+                    case ListBlock l: foreach (var item in l.Items) VisitBlocks(item.Blocks); break;
+                    case TableBlock t:
+                        foreach (var cell in t.Header) VisitInlines(cell);
+                        foreach (var row in t.Rows) foreach (var cell in row) VisitInlines(cell);
+                        break;
+                }
+            }
+        }
+
+        void VisitInlines(List<MarkdownInline> inlines)
+        {
+            foreach (var inline in inlines)
+            {
+                switch (inline)
+                {
+                    case FootnoteReferenceInline reference:
+                        var key = ParseContext.NormalizeLabel(reference.Label);
+                        if (!byLabel.TryGetValue(key, out var footnote))
+                        {
+                            footnote = new FootnoteBlock(reference.Label, document.Footnotes.Count + 1);
+                            byLabel[key] = footnote;
+                            document.Footnotes.Add(footnote);
+                        }
+
+                        reference.Number = footnote.Number;
+                        reference.Ordinal = ++footnote.ReferenceCount;
+                        break;
+                    case EmphasisInline e: VisitInlines(e.Inlines); break;
+                    case StrikethroughInline s: VisitInlines(s.Inlines); break;
+                    case LinkInline l: VisitInlines(l.Inlines); break;
+                }
+            }
+        }
+    }
+
     private static void ParseParagraph(
         List<string> lines,
         ref int index,
         int end,
         List<MarkdownBlock> output,
-        MarkdownOptions options,
+        ParseContext context,
         bool isComplete)
     {
+        var options = context.Options;
         var builder = new StringBuilder();
         var cursor = index;
         var level = 0;
@@ -677,11 +997,13 @@ public static class MarkdownParser
                 var setext = line.Trim();
                 if (setext.Length > 0 && setext.All(c => c == '=')) { level = 1; cursor++; break; }
                 if (setext.Length > 0 && setext.All(c => c == '-')) { level = 2; cursor++; break; }
-                if (StartsNewBlock(lines, cursor, end, options)) break;
+                if (StartsNewBlock(lines, cursor, end, context)) break;
             }
 
+            // A line's leading indentation is not content, as CommonMark reads paragraphs; its
+            // trailing spaces are, since two of them make a hard break.
             if (builder.Length > 0) builder.Append('\n');
-            builder.Append(line);
+            builder.Append(line.AsSpan().TrimStart(" \t"));
             cursor++;
         }
 
@@ -693,20 +1015,18 @@ public static class MarkdownParser
 
         if (level > 0)
         {
-            var heading = new HeadingBlock(level);
-            heading.Inlines.AddRange(InlineParser.Parse(text, options, isComplete: true));
-            if (options.HeadingIds) heading.Id = Slug(text);
-            output.Add(heading);
+            output.Add(CreateHeading(level, text, context));
             return;
         }
 
         var paragraph = new ParagraphBlock { IsOpen = open };
-        paragraph.Inlines.AddRange(InlineParser.Parse(text, options, !open || !options.HideDanglingDelimiters));
+        paragraph.Inlines.AddRange(InlineParser.Parse(text, options, !open || !options.HideDanglingDelimiters, context));
         output.Add(paragraph);
     }
 
-    private static bool StartsNewBlock(List<string> lines, int index, int end, MarkdownOptions options)
+    private static bool StartsNewBlock(List<string> lines, int index, int end, ParseContext context)
     {
+        var options = context.Options;
         var line = lines[index];
         var trimmed = line.TrimStart();
         if (trimmed.Length == 0) return true;
@@ -717,6 +1037,7 @@ public static class MarkdownParser
         if (IsThematicBreak(line)) return true;
         if (options.Math && IsDisplayMathLine(trimmed)) return true;
         if (options.Tables && index + 1 < end && line.Contains('|') && ParseAlignments(lines[index + 1]) is not null) return true;
+        if (options.AllowRawHtml && IsHtmlBlockStart(trimmed, interruptingParagraph: true)) return true;
         return false;
     }
 
@@ -735,5 +1056,86 @@ public static class MarkdownParser
         while (level < trimmed.Length && trimmed[level] == '#') level++;
         if (level is 0 or > 6) return 0;
         return level == trimmed.Length || trimmed[level] is ' ' or '\t' ? level : 0;
+    }
+}
+
+/// <summary>A link reference definition's destination and title.</summary>
+internal readonly record struct LinkReferenceDefinition(string Url, string? Title);
+
+/// <summary>
+/// What one parse of a document shares between its blocks: the options, the heading identifiers
+/// already handed out, and the definitions that references resolve against.
+/// </summary>
+internal sealed class ParseContext(MarkdownOptions options)
+{
+    /// <summary>Which extensions to enable.</summary>
+    public MarkdownOptions Options { get; } = options;
+
+    /// <summary>Every heading identifier assigned so far, so no two headings share one.</summary>
+    public HashSet<string> HeadingIds { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>Link reference definitions by normalised label, or <see langword="null"/> when there are none.</summary>
+    public Dictionary<string, LinkReferenceDefinition>? LinkDefinitions { get; set; }
+
+    /// <summary>Footnote definitions by normalised label, as the lines of their text.</summary>
+    public Dictionary<string, List<string>>? FootnoteDefinitions { get; set; }
+
+    /// <summary>
+    /// Whether the definitions are complete, so a reference can be resolved rather than left as
+    /// text. False on the first pass over a document, which only collects them.
+    /// </summary>
+    public bool ResolvesReferences { get; init; }
+
+    /// <summary>Whether any definition was found.</summary>
+    public bool SawDefinitions => LinkDefinitions is not null || FootnoteDefinitions is not null;
+
+    /// <summary>Finds the link a reference label points at.</summary>
+    public bool TryGetLink(ReadOnlySpan<char> label, out LinkReferenceDefinition definition)
+    {
+        definition = default;
+        return ResolvesReferences && LinkDefinitions is not null && LinkDefinitions.TryGetValue(NormalizeLabel(label), out definition);
+    }
+
+    /// <summary>Whether a footnote with this label is defined.</summary>
+    public bool HasFootnote(ReadOnlySpan<char> label) =>
+        ResolvesReferences && FootnoteDefinitions is not null && FootnoteDefinitions.ContainsKey(NormalizeLabel(label));
+
+    /// <summary>
+    /// Gives a heading an identifier derived from its text: prefixed so it cannot collide with
+    /// the host page's own ids, and suffixed when the same text appears twice.
+    /// </summary>
+    public string ClaimHeadingId(string text)
+    {
+        var slug = MarkdownParser.Slug(text);
+        var id = "bai-h-" + (slug.Length == 0 ? "section" : slug);
+        if (HeadingIds.Add(id)) return id;
+
+        for (var n = 2; ; n++)
+        {
+            var candidate = $"{id}-{n}";
+            if (HeadingIds.Add(candidate)) return candidate;
+        }
+    }
+
+    /// <summary>Case-folds a label and collapses its whitespace, as CommonMark matches labels.</summary>
+    public static string NormalizeLabel(ReadOnlySpan<char> label)
+    {
+        var builder = new StringBuilder(label.Length);
+        var pendingSpace = false;
+
+        foreach (var c in label.Trim())
+        {
+            if (char.IsWhiteSpace(c))
+            {
+                pendingSpace = true;
+                continue;
+            }
+
+            if (pendingSpace && builder.Length > 0) builder.Append(' ');
+            pendingSpace = false;
+            builder.Append(char.ToUpperInvariant(c));
+        }
+
+        return builder.ToString();
     }
 }

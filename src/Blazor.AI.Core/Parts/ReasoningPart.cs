@@ -27,7 +27,7 @@ public sealed class ReasoningPart : TextPart
     public override string Kind => MessagePartKinds.Reasoning;
 
     /// <summary>When reasoning began, used to show how long the model thought for.</summary>
-    public DateTimeOffset StartedAt { get; }
+    public DateTimeOffset StartedAt { get; private set; }
 
     /// <summary>When reasoning finished.</summary>
     public DateTimeOffset? CompletedAt { get; private set; }
@@ -42,6 +42,13 @@ public sealed class ReasoningPart : TextPart
 
     /// <inheritdoc />
     protected override void OnCompleted() => CompletedAt = DateTimeOffset.UtcNow;
+
+    /// <summary>Restores persisted timings. Used by the conversation serializer.</summary>
+    internal void RestoreTimings(DateTimeOffset startedAt, DateTimeOffset? completedAt)
+    {
+        StartedAt = startedAt;
+        CompletedAt = completedAt;
+    }
 }
 
 /// <summary>

@@ -101,6 +101,7 @@ public sealed record Attachment
     /// <summary>
     /// Opens the content on demand. Preferred over <see cref="Data"/> for anything large.
     /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
     public Func<CancellationToken, ValueTask<Stream>>? ContentFactory { get; init; }
 
     /// <summary>Application-defined values carried through to custom attachment renderers.</summary>
@@ -108,6 +109,7 @@ public sealed record Attachment
 
     /// <summary><see langword="true"/> when the content can be read without a network round trip.</summary>
     [MemberNotNullWhen(true, nameof(Data))]
+    [System.Text.Json.Serialization.JsonIgnore]
     public bool HasInlineData => Data is not null;
 
     /// <summary>

@@ -1,6 +1,5 @@
 @namespace Blazor.AI.Components
 @inherits AiComponentBase
-@implements IDisposable
 @inject AiInterop Interop
 
 @*
@@ -21,12 +20,18 @@
             @onclick="ToggleAsync">
         <AiIcon Name="mic" />
     </button>
+
+    @* The pressed state alone does not say that the microphone is live; this does, politely. *@
+    <span class="bai-sr-only" role="status" aria-live="polite">@_status</span>
 }
 
 @code {
     private DotNetObjectReference<VoiceInput>? _self;
     private bool _supported;
     private bool _listening;
+    private bool _disposed;
+    private int _handle;
+    private string? _status;
 
     /// <summary>Raised with each finalised phrase.</summary>
     [Parameter]
@@ -40,6 +45,10 @@
     [Parameter]
     public EventCallback<string> OnError { get; set; }
 
+    /// <summary>Raised when dictation starts or stops, however that happens.</summary>
+    [Parameter]
+    public EventCallback<bool> OnListeningChanged { get; set; }
+
     /// <summary>The recognition language. Defaults to the browser language.</summary>
     [Parameter]
     public string? Language { get; set; }
@@ -50,23 +59,24 @@
     /// <inheritdoc />
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender) return;
+        if (!firstRender || _disposed) return;
 
         _self = DotNetObjectReference.Create(this);
         _supported = await Interop.InvokeAsync<bool>("isDictationSupported");
-        if (_supported) StateHasChanged();
+        if (_supported && !_disposed) StateHasChanged();
     }
 
     private async Task ToggleAsync()
     {
         if (_listening)
         {
-            await Interop.InvokeVoidAsync("stopDictation");
-            _listening = false;
+            await Interop.InvokeVoidAsync("stopDictation", _handle);
+            await SetListeningAsync(false, Strings.DictationStopped);
             return;
         }
 
-        _listening = await Interop.InvokeAsync<bool>("startDictation", _self, Language);
+        _handle = await Interop.InvokeAsync<int>("startDictation", _self, Language);
+        if (_handle > 0) await SetListeningAsync(true, Strings.Listening);
     }
 
     /// <summary>Called from the browser with recognised speech.</summary>
@@ -74,10 +84,12 @@
     /// <param name="interim">Provisional text that may still change.</param>
     /// <returns>A task that completes once the callbacks have run.</returns>
     [JSInvokable]
-    public async Task OnTranscriptReceived(string final, string interim)
+    public async Task OnTranscriptReceived(string? final, string? interim)
     {
+        if (_disposed) return;
         if (!string.IsNullOrWhiteSpace(final)) await OnTranscript.InvokeAsync(final.Trim());
-        if (!string.IsNullOrWhiteSpace(interim)) await OnInterim.InvokeAsync(interim);
+        // An empty interim clears the provisional text the previous one showed.
+        await OnInterim.InvokeAsync(interim ?? string.Empty);
         await InvokeAsync(StateHasChanged);
     }
 
@@ -87,35 +99,53 @@
     [JSInvokable]
     public async Task OnDictationError(string error)
     {
-        _listening = false;
+        if (_disposed) return;
+        _handle = 0;
+        await SetListeningAsync(false, Strings.DictationFailed(error));
         await OnError.InvokeAsync(error);
         await InvokeAsync(StateHasChanged);
     }
 
     /// <summary>Called from the browser when transcription stops on its own.</summary>
-    /// <returns>A task that completes once the state has been applied.</returns>
+    /// <returns>A task that completes when the state has been applied.</returns>
     [JSInvokable]
-    public Task OnDictationEnded()
+    public async Task OnDictationEnded()
     {
-        _listening = false;
-        return InvokeAsync(StateHasChanged);
+        if (_disposed) return;
+        _handle = 0;
+        if (_listening) await SetListeningAsync(false, Strings.DictationStopped);
+        await InvokeAsync(StateHasChanged);
     }
 
-    /// <inheritdoc />
-    public void Dispose()
+    private async Task SetListeningAsync(bool listening, string status)
     {
-        _self?.Dispose();
-        _self = null;
+        var changed = _listening != listening;
+        _listening = listening;
+        _status = status;
+        if (changed) await OnListeningChanged.InvokeAsync(listening);
     }
 
     /// <inheritdoc />
     /// <remarks>
-    /// Removing the button must not leave the microphone running with nothing able to stop it.
+    /// Removing the button must not leave the microphone running with nothing able to stop it, and
+    /// the object reference must go with the component or the browser keeps calling into a ghost.
     /// </remarks>
     protected override async ValueTask DisposeCoreAsync()
     {
-        if (!_listening) return;
-        _listening = false;
-        await Interop.InvokeVoidAsync("stopDictation");
+        _disposed = true;
+
+        try
+        {
+            if (_listening)
+            {
+                _listening = false;
+                await Interop.InvokeVoidAsync("stopDictation", _handle);
+            }
+        }
+        finally
+        {
+            _self?.Dispose();
+            _self = null;
+        }
     }
 }

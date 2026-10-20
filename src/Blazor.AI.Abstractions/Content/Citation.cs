@@ -137,5 +137,6 @@ public sealed record Citation
     public int? Number { get; init; }
 
     /// <summary><see langword="true"/> when the citation addresses a span of text.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
     public bool IsAnchored => StartIndex is not null && EndIndex is not null && EndIndex > StartIndex;
 }

@@ -32,16 +32,24 @@ a single component instance restyles the framework without touching its source.
 
 ## Dark mode
 
-Dark values are defined in two places so that all three ways of choosing a theme work: an explicit
-choice, and the system preference where no explicit choice was made.
+There are three ways to choose a scheme, and the stylesheet keeps them from fighting: an explicit
+light region, an explicit dark region, and the system preference where nothing explicit was said.
 
 ```css
-.bai-theme-dark, [data-bai-theme="dark"] { /* explicit */ }
+.bai-theme-light, [data-bai-theme="light"] { color-scheme: light; /* the whole light palette */ }
+.bai-theme-dark,  [data-bai-theme="dark"]  { color-scheme: dark;  /* the whole dark palette */ }
 
 @media (prefers-color-scheme: dark) {
-  :root:not([data-bai-theme="light"]) { /* system, unless overridden */ }
+  :root:not([data-bai-theme="light"]):not(.bai-theme-light) { /* system, on the page root only */ }
 }
 ```
+
+The system rule targets the page root and nothing else. An explicit region restates every palette
+token on its own element, and an element's own declarations beat anything it inherits, so
+`<AiTheme Theme="Light">` stays light inside a page the operating system has made dark, and
+`<AiTheme Theme="Dark">` stays dark on a light page. Each explicit block also sets `color-scheme`,
+so native controls, scrollbars, and form fields inside the region follow the region rather than the
+page.
 
 In markup:
 
@@ -50,6 +58,10 @@ In markup:
     <AiChat />
 </AiTheme>
 ```
+
+`AiTheme` writes `data-bai-theme` on its root for `Light` and `Dark`, and nothing for `System`. The
+root also carries the `bai-theme` class, so the brand accent below is resolved on it whichever way
+the scheme was chosen.
 
 The dark palette redefines the palette tokens, including `--bai-color-accent`, and it does so on
 every element that chooses a scheme. A value written straight into a palette token on `:root`
@@ -121,6 +133,26 @@ The derivation uses `color-mix()`, available in every current browser engine.
 Compact reduces the type scale, line height, and message gap, which suits a sidebar or an embedded
 panel rather than a full page.
 
+## Direction
+
+The stylesheet uses logical properties throughout: `padding-inline-start` rather than
+`padding-left`, `inset-inline-start` rather than `left`, `text-align: start` rather than `left`,
+`border-end-end-radius` on the user bubble rather than `border-bottom-right-radius`. A right-to-left
+page therefore gets a right-to-left chat with nothing more than `dir="rtl"` on an ancestor: padding,
+borders, the menu position, the user bubble, and the number gutter in code blocks all flip together.
+The panel chevron and the send arrow are mirrored under `[dir="rtl"]` and `:dir(rtl)` so they keep
+pointing into the reading direction.
+
+To set the direction for the chat alone, use `AiTheme`:
+
+```razor
+<AiTheme Direction="AiTheme.AiTextDirection.RightToLeft">
+    <AiChat />
+</AiTheme>
+```
+
+`Inherit`, the default, writes no `dir` attribute and follows the page.
+
 ## Scoping
 
 Tokens cascade, so a region can differ from the page:
@@ -140,7 +172,13 @@ Every class is prefixed `bai-` and follows a block, element, modifier pattern:
 .bai-panel              .bai-panel--open          .bai-panel__header
 .bai-code               .bai-code--numbered       .bai-code__header
 .bai-composer           .bai-composer__row        .bai-composer__send
+.bai-composer__attach   .bai-composer__footer     .bai-composer__counter
+.bai-composer__interim  .bai-composer__notice     .bai-composer__drop
 ```
+
+The composer's counter takes `--near` when the text is close to `MaxLength` and `--over` when it
+exceeds it, which is how the warning and danger colours reach it; the interim line shows dictation
+that is not yet final.
 
 They are stable and safe to target. CSS isolation is deliberately not used: scoped attributes would
 make the library harder to restyle, which is the opposite of the goal.
@@ -148,9 +186,20 @@ make the library harder to restyle, which is the opposite of the goal.
 ## Motion and contrast
 
 Animations are short and expressed with tokens. Under `prefers-reduced-motion: reduce` every
-animation and transition is reduced to nothing and the streaming caret stops blinking. Under
-`forced-colors: active` the panels, code blocks, source cards, artifacts, and composer take system
-borders so their structure survives.
+animation and transition is reduced to nothing, both by a blanket rule on everything under `.bai`
+and by name for each animated class, so a component rendered outside a `.bai` root is covered too.
+The streaming caret stops blinking and smooth scrolling becomes instant.
 
-There is also a print stylesheet: the composer, hover actions, and scroll button are hidden, and the
+Under `prefers-contrast: more` the border tokens are redefined from the text colours on every
+element that chooses a scheme, so lines darken in light and lighten in dark; focus rings widen to
+three pixels; primary buttons, chips, and suggestions gain a border; the active menu option and the
+active conversation take an outline; and hover-revealed message actions are always shown.
+
+Under `forced-colors: active` the panels, code blocks, source cards, artifacts, menu, attachments,
+forms, and composer take `CanvasText` borders so their structure survives; focus rings, the active
+menu option, and the drop target use `Highlight` outlines, because background colours do not
+survive forced colours; and progress bars, meters, and the caret are drawn in `Highlight`.
+
+There is also a print stylesheet: the composer, its menu, hover actions, the scroll button, and the
+backdrop are hidden, the footer itself is kept in case the host put printable content in it, and the
 transcript is allowed to flow rather than scroll.

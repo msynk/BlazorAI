@@ -9,6 +9,7 @@ namespace Blazor.AI;
 /// (for example <c>"critic"</c> in a multi-agent debate) without forking the library.
 /// Comparison is ordinal and case-insensitive.
 /// </remarks>
+[System.Text.Json.Serialization.JsonConverter(typeof(Json.AiRoleJsonConverter))]
 public readonly record struct AiRole : IComparable<AiRole>
 {
     /// <summary>A message authored by the end user.</summary>

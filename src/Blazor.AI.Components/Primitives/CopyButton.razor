@@ -4,13 +4,14 @@
 
 @*
     Copies text and confirms it, because a copy button that gives no feedback leaves the user
-    guessing whether it worked.
+    guessing whether it worked. The confirmation is also announced, since a changed icon is
+    invisible to a screen reader.
 *@
 
 <button type="button"
         class="bai-btn bai-btn--icon @Class"
         title="@(_copied ? Strings.Copied : Label ?? Strings.Copy)"
-        aria-label="@(Label ?? Strings.Copy)"
+        aria-label="@(_copied ? Strings.Copied : Label ?? Strings.Copy)"
         disabled="@(Content is null)"
         @onclick="CopyAsync">
     <AiIcon Name="@(_copied ? "check" : "copy")" />
@@ -18,6 +19,7 @@
     {
         <span>@(_copied ? Strings.Copied : Label ?? Strings.Copy)</span>
     }
+    <span class="bai-sr-only" role="status" aria-live="polite">@(_copied ? Strings.Copied : null)</span>
 </button>
 
 @code {

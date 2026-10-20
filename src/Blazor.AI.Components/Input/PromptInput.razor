@@ -1,6 +1,5 @@
 @namespace Blazor.AI.Components
 @inherits AiComponentBase
-@implements IDisposable
 @inject AiInterop Interop
 
 @*
@@ -24,7 +23,7 @@
         <div class="bai-attachments">
             @foreach (var attachment in _attachments)
             {
-                <AttachmentChip Attachment="attachment" OnRemove="RemoveAttachment" @key="attachment.AttachmentId" />
+                <AttachmentChip Attachment="attachment" OnRemove="RemoveAttachmentAsync" @key="attachment.AttachmentId" />
             }
         </div>
     }
@@ -50,9 +49,12 @@
         </div>
     }
 
-    @if (_menuItems.Count > 0)
+    @if (MenuOpen)
     {
-        <div class="bai-menu bai-menu--above" role="listbox" id="@_menuId">
+        <div class="bai-menu bai-menu--above"
+             role="listbox"
+             id="@_menuId"
+             aria-label="@(_menuTrigger == '/' ? Strings.Commands : Strings.Mentions)">
             @for (var i = 0; i < _menuItems.Count; i++)
             {
                 var index = i;
@@ -84,34 +86,57 @@
             <div class="bai-composer__tools">@Leading</div>
         }
 
+        @* A combobox rather than a plain textbox: the slash and mention menu is a listbox popup that
+           the arrow keys drive, and aria-activedescendant tells assistive technology which option
+           those keys have reached while focus stays in the text. *@
         <textarea @ref="_textarea"
                   class="bai-composer__textarea"
                   rows="1"
                   placeholder="@(Placeholder ?? Strings.PromptPlaceholder)"
                   aria-label="@(Placeholder ?? Strings.PromptPlaceholder)"
-                  aria-controls="@(_menuItems.Count > 0 ? _menuId : null)"
-                  aria-activedescendant="@(_menuItems.Count > 0 ? OptionId(_menuIndex) : null)"
-                  data-bai-menu-open="@(_menuItems.Count > 0 ? "true" : null)"
+                  role="combobox"
+                  aria-haspopup="listbox"
+                  aria-autocomplete="list"
+                  aria-expanded="@(MenuOpen ? "true" : "false")"
+                  aria-controls="@(MenuOpen ? _menuId : null)"
+                  aria-activedescendant="@(MenuOpen ? OptionId(_menuIndex) : null)"
+                  aria-describedby="@(MaxLength is not null ? _counterId : null)"
+                  data-bai-menu-open="@(MenuOpen ? "true" : null)"
+                  maxlength="@MaxLength"
                   disabled="@Disabled"
                   value="@Value"
                   @oninput="OnInputAsync"
-                  @onkeydown="OnKeyDownAsync"></textarea>
+                  @onkeydown="OnKeyDownAsync"
+                  @onkeyup="OnKeyUpAsync"></textarea>
 
         <div class="bai-composer__tools">
-            @if (AllowAttachments)
+            @if (ShowAttachments)
             {
-                <label class="bai-btn bai-btn--icon" title="@Strings.AttachFile">
+                @* A real button carries the accessible name and the focus ring; the file input is
+                   kept, out of the tab order, because only it can open the picker and deliver files. *@
+                <button type="button"
+                        class="bai-btn bai-btn--icon bai-composer__attach"
+                        title="@Strings.AttachFile"
+                        aria-label="@Strings.AttachFile"
+                        disabled="@Disabled"
+                        @onclick="OpenFilePickerAsync">
                     <AiIcon Name="paperclip" />
-                    @* Visually hidden rather than display:none, so the input stays in the tab order and
-                       the button is reachable from the keyboard. *@
-                    <InputFile OnChange="OnFilesSelectedAsync" multiple accept="@Accept" class="bai-sr-only" />
-                    <span class="bai-sr-only">@Strings.AttachFile</span>
-                </label>
+                </button>
+                <InputFile @ref="_fileInput"
+                           OnChange="OnFilesSelectedAsync"
+                           multiple
+                           accept="@EffectiveAccept"
+                           class="bai-sr-only"
+                           tabindex="-1"
+                           aria-hidden="true" />
             }
 
-            @if (AllowDictation)
+            @if (ShowDictation)
             {
-                <VoiceInput OnTranscript="OnTranscriptAsync" />
+                <VoiceInput Language="@DictationLanguage"
+                            OnTranscript="OnTranscriptAsync"
+                            OnInterim="OnInterimAsync"
+                            OnListeningChanged="OnListeningChangedAsync" />
             }
 
             @if (Trailing is not null)
@@ -119,33 +144,51 @@
                 @Trailing
             }
 
-            @if (IsGenerating)
-            {
-                <button type="button"
-                        class="bai-btn bai-btn--icon bai-composer__send bai-btn--outline"
-                        title="@Strings.Stop"
-                        aria-label="@Strings.Stop"
-                        @onclick="StopAsync">
-                    <AiIcon Name="stop" />
-                </button>
-            }
-            else
-            {
-                <button type="button"
-                        class="bai-btn bai-btn--primary bai-composer__send"
-                        title="@Strings.Send"
-                        aria-label="@Strings.Send"
-                        disabled="@(!CanSubmit)"
-                        @onclick="SubmitAsync">
-                    <AiIcon Name="send" />
-                </button>
-            }
+            @* One element for send and stop, so focus stays on it when a turn starts or ends. *@
+            <button type="button"
+                    @key="@SendButtonKey"
+                    class="bai-btn bai-composer__send @(IsGenerating ? "bai-btn--icon bai-btn--outline" : "bai-btn--primary")"
+                    title="@(IsGenerating ? Strings.Stop : Strings.Send)"
+                    aria-label="@(IsGenerating ? Strings.Stop : Strings.Send)"
+                    disabled="@(!IsGenerating && !CanSubmit)"
+                    @onclick="SendOrStopAsync">
+                <AiIcon Name="@(IsGenerating ? "stop" : "send")" />
+            </button>
         </div>
     </div>
 
-    @if (Hint is not null)
+    @if (_interim is { Length: > 0 } interim)
     {
-        <div class="bai-composer__hint">@Hint</div>
+        @* Provisional dictation, shown but not announced: it changes with every syllable. *@
+        <div class="bai-composer__interim" aria-hidden="true">@interim</div>
+    }
+
+    @if (Hint is not null || MaxLength is not null)
+    {
+        <div class="bai-composer__footer">
+            @if (Hint is not null)
+            {
+                <div class="bai-composer__hint">@Hint</div>
+            }
+
+            @if (MaxLength is { } max)
+            {
+                <div id="@_counterId"
+                     class="bai-composer__counter @(NearLimit ? "bai-composer__counter--near" : null) @(Value.Length > max ? "bai-composer__counter--over" : null)"
+                     aria-hidden="true">@Strings.CharacterCount(Value.Length, max)</div>
+            }
+        </div>
+    }
+
+    @if (MaxLength is { } limit)
+    {
+        @* Quiet until the limit is close, then a polite count so a screen reader user is not cut off. *@
+        <div class="bai-sr-only" role="status" aria-live="polite">
+            @if (NearLimit)
+            {
+                @Strings.CharactersRemaining(Math.Max(0, limit - Value.Length))
+            }
+        </div>
     }
 </div>
 
@@ -153,19 +196,34 @@
     /// <summary>The default for <see cref="MaxAttachmentSize"/>: 10 MB.</summary>
     public const long DefaultMaxAttachmentSize = 10 * 1024 * 1024;
 
+    /// <summary>The default for <see cref="MaxAttachments"/>.</summary>
+    public const int DefaultMaxAttachments = 20;
+
+    /// <summary>The default for <see cref="MaxInlineSize"/>: 256 KB.</summary>
+    public const long DefaultMaxInlineSize = 256 * 1024;
+
+    private const string SendButtonKey = "send";
+
     // Enough to explain a multi-file drop without the notice outgrowing the composer.
     private const int MaxNotices = 3;
 
     private readonly List<Attachment> _attachments = [];
+    private readonly Dictionary<string, StagedResources> _staged = [];
     private readonly List<AttachmentRejection> _rejections = [];
     private readonly List<MenuEntry> _menuItems = [];
     private readonly string _menuId = $"bai-menu-{Guid.NewGuid():N}";
+    private readonly string _counterId = $"bai-counter-{Guid.NewGuid():N}";
     private ElementReference _root;
     private ElementReference _textarea;
+    private InputFile? _fileInput;
     private DotNetObjectReference<PromptInput>? _self;
     private long? _registeredMaxSize;
+    private bool? _registeredSubmitOnEnter;
+    private string? _restoredDraftKey;
     private int? _pendingCaret;
     private bool _dragging;
+    private bool _disposed;
+    private string? _interim;
     private int _menuIndex;
     private char _menuTrigger;
     private int _menuStart = -1;
@@ -206,12 +264,25 @@
     public bool Disabled { get; set; }
 
     /// <summary>Offer the attachment button and accept dropped or pasted files.</summary>
+    /// <remarks>
+    /// Also subject to the model: when <see cref="Model"/> or <see cref="Capabilities"/> is set and
+    /// declares neither <see cref="ModelCapabilities.Vision"/>, <see cref="ModelCapabilities.Documents"/>
+    /// nor <see cref="ModelCapabilities.Audio"/>, attachments are hidden whatever this says.
+    /// </remarks>
     [Parameter]
     public bool AllowAttachments { get; set; } = true;
 
     /// <summary>Offer the dictation button, when the browser supports it.</summary>
+    /// <remarks>
+    /// Hidden when <see cref="Model"/> or <see cref="Capabilities"/> is set and does not declare
+    /// <see cref="ModelCapabilities.Audio"/>.
+    /// </remarks>
     [Parameter]
     public bool AllowDictation { get; set; }
+
+    /// <summary>The dictation language. Defaults to the browser language.</summary>
+    [Parameter]
+    public string? DictationLanguage { get; set; }
 
     /// <summary>
     /// The file types to accept, in the syntax of the HTML <c>accept</c> attribute: extensions such
@@ -219,7 +290,9 @@
     /// </summary>
     /// <remarks>
     /// Applied to the file picker and also checked for pasted and dropped files, which the browser
-    /// does not filter. Every type is accepted when unset.
+    /// does not filter. When unset, the accepted types follow the model's capabilities if a
+    /// <see cref="Model"/> or <see cref="Capabilities"/> is given, and every type is accepted
+    /// otherwise.
     /// </remarks>
     [Parameter]
     public string? Accept { get; set; }
@@ -235,6 +308,59 @@
     /// </remarks>
     [Parameter]
     public long MaxAttachmentSize { get; set; } = DefaultMaxAttachmentSize;
+
+    /// <summary>
+    /// The most files that can be staged at once. Defaults to <see cref="DefaultMaxAttachments"/>.
+    /// </summary>
+    [Parameter]
+    public int MaxAttachments { get; set; } = DefaultMaxAttachments;
+
+    /// <summary>
+    /// The largest file whose bytes are held in memory, in bytes. Defaults to
+    /// <see cref="DefaultMaxInlineSize"/>.
+    /// </summary>
+    /// <remarks>
+    /// A file within this size is buffered and carries <see cref="Attachment.Data"/> and a data URL.
+    /// A larger file is kept in the browser and read through <see cref="Attachment.ContentFactory"/>
+    /// when something opens it, so a circuit never holds megabytes per attachment. Image thumbnails
+    /// are object URLs made in the browser either way.
+    /// </remarks>
+    [Parameter]
+    public long MaxInlineSize { get; set; } = DefaultMaxInlineSize;
+
+    /// <summary>The most characters the text may hold. Unlimited when unset.</summary>
+    /// <remarks>
+    /// Enforced by the textarea and shown as a counter under the composer, which is announced
+    /// politely once the limit is close.
+    /// </remarks>
+    [Parameter]
+    public int? MaxLength { get; set; }
+
+    /// <summary>
+    /// A key under which the draft text is kept in the browser's session storage, so it survives a
+    /// reload or a dropped circuit. Drafts are not persisted when unset.
+    /// </summary>
+    /// <remarks>
+    /// Restored when the composer first renders with an empty value, saved on every change, and
+    /// cleared on submit. Use a key that identifies the conversation, so drafts do not bleed between
+    /// them.
+    /// </remarks>
+    [Parameter]
+    public string? DraftKey { get; set; }
+
+    /// <summary>
+    /// The model the prompt is for. Its capabilities decide whether attachments and dictation are
+    /// offered and which file types the picker accepts.
+    /// </summary>
+    [Parameter]
+    public AiModel? Model { get; set; }
+
+    /// <summary>
+    /// The capabilities to assume, when there is no <see cref="Model"/> record or its capabilities
+    /// should be overridden.
+    /// </summary>
+    [Parameter]
+    public ModelCapabilities? Capabilities { get; set; }
 
     /// <summary>Commands offered when the user types a forward slash.</summary>
     [Parameter]
@@ -257,7 +383,8 @@
     public RenderFragment? Hint { get; set; }
 
     /// <summary>
-    /// Raised for each file the composer turns away: too large, not an accepted type, or unreadable.
+    /// Raised for each file the composer turns away: too large, too many, not an accepted type, or
+    /// unreadable.
     /// </summary>
     /// <remarks>
     /// The composer already tells the user with an inline message. Handle this to log the rejection
@@ -269,10 +396,27 @@
     /// <summary>The attachments currently staged.</summary>
     public IReadOnlyList<Attachment> Attachments => _attachments;
 
+    /// <summary>The capabilities in force: <see cref="Capabilities"/>, else those of <see cref="Model"/>.</summary>
+    public ModelCapabilities? EffectiveCapabilities => Capabilities ?? Model?.Capabilities;
+
     private bool IsGenerating => Generating ?? Session?.IsGenerating ?? false;
 
+    private bool MenuOpen => _menuItems.Count > 0;
+
+    private bool ShowAttachments => AllowAttachments
+        && (EffectiveCapabilities is not { } capabilities
+            || (capabilities & (ModelCapabilities.Vision | ModelCapabilities.Documents | ModelCapabilities.Audio)) != 0);
+
+    private bool ShowDictation => AllowDictation
+        && (EffectiveCapabilities is not { } capabilities || capabilities.HasFlag(ModelCapabilities.Audio));
+
+    private string? EffectiveAccept => Accept ?? AcceptFromCapabilities();
+
+    private bool NearLimit => MaxLength is { } max && max - Value.Length <= Math.Max(10, max / 10);
+
     private bool CanSubmit => !Disabled && !IsGenerating
-        && (!string.IsNullOrWhiteSpace(Value) || _attachments.Count > 0);
+        && (!string.IsNullOrWhiteSpace(Value) || _attachments.Count > 0)
+        && (MaxLength is not { } max || Value.Length <= max);
 
     /// <summary>Puts the caret in the composer.</summary>
     /// <returns>A task that completes once focus has been requested.</returns>
@@ -281,26 +425,46 @@
     /// <inheritdoc />
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (_disposed) return;
+
         // Registered again whenever the limit changes, because the browser checks it before reading.
-        if (AllowAttachments && _registeredMaxSize != MaxAttachmentSize)
+        if (ShowAttachments && _registeredMaxSize != MaxAttachmentSize)
         {
             _self ??= DotNetObjectReference.Create(this);
             _registeredMaxSize = MaxAttachmentSize;
             await Interop.InvokeVoidAsync("registerPaste", _textarea, _self, MaxAttachmentSize);
             await Interop.InvokeVoidAsync("registerDrop", _root, _self, MaxAttachmentSize);
         }
-        else if (!AllowAttachments && _registeredMaxSize is not null)
+        else if (!ShowAttachments && _registeredMaxSize is not null)
         {
             _registeredMaxSize = null;
             await Interop.InvokeVoidAsync("unregisterPaste", _textarea);
             await Interop.InvokeVoidAsync("unregisterDrop", _root);
         }
 
-        if (firstRender)
+        // The key guard is registered again when the submit key changes, not only once.
+        if (_registeredSubmitOnEnter != Options.SubmitOnEnter)
         {
+            _registeredSubmitOnEnter = Options.SubmitOnEnter;
             await Interop.InvokeVoidAsync("registerSubmitKey", _textarea, Options.SubmitOnEnter);
         }
 
+        if (!string.Equals(_restoredDraftKey, DraftKey, StringComparison.Ordinal))
+        {
+            _restoredDraftKey = DraftKey;
+            if (DraftKey is not null && string.IsNullOrEmpty(Value))
+            {
+                var draft = await Interop.InvokeAsync<string?>("readDraft", DraftKey);
+                if (!string.IsNullOrEmpty(draft) && !_disposed)
+                {
+                    Value = draft;
+                    await ValueChanged.InvokeAsync(Value);
+                    StateHasChanged();
+                }
+            }
+        }
+
+        if (_disposed) return;
         await Interop.InvokeVoidAsync("autoResize", _textarea, Options.MaxComposerRows);
 
         // Set after the render that wrote the new text, which otherwise leaves the caret at the end.
@@ -315,12 +479,16 @@
     {
         Value = args.Value?.ToString() ?? string.Empty;
         await ValueChanged.InvokeAsync(Value);
+        await SaveDraftAsync();
         await UpdateMenuAsync();
     }
 
     private async Task OnKeyDownAsync(KeyboardEventArgs args)
     {
-        if (_menuItems.Count > 0)
+        // Enter during IME composition confirms the candidate; it is never a submit or a menu choice.
+        if (IsComposing(args)) return;
+
+        if (MenuOpen)
         {
             switch (args.Key)
             {
@@ -339,15 +507,33 @@
             }
         }
 
-        var submits = Options.SubmitOnEnter
-            ? args.Key is "Enter" && !args.ShiftKey && !args.AltKey && !args.CtrlKey && !args.MetaKey
-            : args.Key is "Enter" && (args.CtrlKey || args.MetaKey);
+        // Escape closes the menu first; with no menu open it stops the turn in flight.
+        if (args.Key is "Escape")
+        {
+            if (IsGenerating) await StopAsync();
+            return;
+        }
 
-        if (!submits) return;
+        if (args.Key is not "Enter" || args.ShiftKey || args.AltKey) return;
+
+        var withModifier = args.CtrlKey || args.MetaKey;
+        if (!withModifier && !Options.SubmitOnEnter) return;
 
         // The newline was already suppressed in the browser by the registered submit-key guard.
         await SubmitAsync();
     }
+
+    /// <remarks>
+    /// Moving the caret with the keyboard can carry it into or out of a slash or mention token, so
+    /// the menu is reconsidered once the caret has settled.
+    /// </remarks>
+    private Task OnKeyUpAsync(KeyboardEventArgs args) => args.Key is "ArrowLeft" or "ArrowRight" or "Home" or "End"
+        ? UpdateMenuAsync()
+        : Task.CompletedTask;
+
+    private static bool IsComposing(KeyboardEventArgs args) => args.IsComposing || args.Key is "Process";
+
+    private Task SendOrStopAsync() => IsGenerating ? StopAsync() : SubmitAsync();
 
     private async Task SubmitAsync()
     {
@@ -357,10 +543,14 @@
 
         Value = string.Empty;
         _attachments.Clear();
+        // The message owns the attachments now: their browser streams and previews go with them.
+        _staged.Clear();
         _rejections.Clear();
+        _interim = null;
         CloseMenu();
 
         await ValueChanged.InvokeAsync(Value);
+        if (DraftKey is not null) await Interop.InvokeVoidAsync("clearDraft", DraftKey);
         await OnSubmit.InvokeAsync(submission);
         await Interop.InvokeVoidAsync("autoResize", _textarea, Options.MaxComposerRows);
 
@@ -378,39 +568,91 @@
 
     private async Task OnTranscriptAsync(string transcript)
     {
+        _interim = null;
         Value = string.IsNullOrEmpty(Value) ? transcript : $"{Value} {transcript}";
+        if (MaxLength is { } max && Value.Length > max) Value = Value[..max];
         await ValueChanged.InvokeAsync(Value);
+        await SaveDraftAsync();
+    }
+
+    private Task OnInterimAsync(string interim)
+    {
+        _interim = interim;
+        return Task.CompletedTask;
+    }
+
+    private Task OnListeningChangedAsync(bool listening)
+    {
+        if (!listening) _interim = null;
+        return Task.CompletedTask;
+    }
+
+    private ValueTask SaveDraftAsync() => DraftKey is null
+        ? ValueTask.CompletedTask
+        : Interop.InvokeVoidAsync("writeDraft", DraftKey, Value);
+
+    private async Task OpenFilePickerAsync()
+    {
+        if (_fileInput?.Element is { } input) await Interop.InvokeVoidAsync("clickElement", input);
     }
 
     private async Task OnFilesSelectedAsync(InputFileChangeEventArgs args)
     {
-        // Every selected file is considered: GetMultipleFiles throws when asked for fewer than were
-        // picked, which would lose the whole selection.
-        foreach (var file in args.GetMultipleFiles(Math.Max(1, args.FileCount)))
+        IReadOnlyList<IBrowserFile> files;
+        try
         {
+            // Every selected file is considered: asking for fewer than were picked throws and would
+            // lose the whole selection.
+            files = args.GetMultipleFiles(Math.Max(1, args.FileCount));
+        }
+        catch (InvalidOperationException)
+        {
+            await RejectAsync(string.Empty, string.Empty, 0, AttachmentRejectionReason.TooMany);
+            return;
+        }
+
+        var position = -1;
+        foreach (var file in files)
+        {
+            position++;
+
             if (Check(file.Name, file.ContentType, file.Size) is { } reason)
             {
                 await RejectAsync(file.Name, file.ContentType, file.Size, reason);
                 continue;
             }
 
+            string? preview = null;
+            if (Attachment.InferKind(file.ContentType, file.Name) is AttachmentKind.Image && _fileInput?.Element is { } input)
+            {
+                preview = await Interop.InvokeAsync<string?>("previewFromInput", input, position, file.Name);
+            }
+
             try
             {
                 // InputFile streams in chunks, so this is bounded by the limit and not by the circuit's
                 // message size.
-                await using var stream = file.OpenReadStream(MaxAttachmentSize);
-                using var buffer = new MemoryStream((int)Math.Min(file.Size, int.MaxValue));
-                await stream.CopyToAsync(buffer);
-                _attachments.Add(ComposerFile.CreateAttachment(file.Name, file.ContentType, buffer.ToArray()));
+                await StageAsync(
+                    file.Name,
+                    file.ContentType,
+                    file.Size,
+                    ct => ValueTask.FromResult(file.OpenReadStream(MaxAttachmentSize, ct)),
+                    preview,
+                    owner: null);
             }
             catch (Exception exception) when (IsReadFailure(exception))
             {
+                await RevokePreviewAsync(preview);
                 await RejectAsync(file.Name, file.ContentType, file.Size, AttachmentRejectionReason.ReadFailed);
             }
         }
     }
 
-    private void RemoveAttachment(Attachment attachment) => _attachments.Remove(attachment);
+    private async Task RemoveAttachmentAsync(Attachment attachment)
+    {
+        _attachments.Remove(attachment);
+        if (_staged.Remove(attachment.AttachmentId, out var staged)) await ReleaseAsync(staged);
+    }
 
     /// <summary>Called from the browser when the user pastes a file into the composer.</summary>
     /// <param name="file">
@@ -422,20 +664,29 @@
     public async Task OnPastedFile(ComposerFile file)
     {
         ArgumentNullException.ThrowIfNull(file);
+        if (_disposed) return;
 
         if (Check(file.Name, file.ContentType, file.Size) is { } reason)
         {
             await ReleaseAsync(file.Content);
+            await RevokePreviewAsync(file.PreviewUrl);
             await RejectAsync(file.Name, file.ContentType, file.Size, reason);
         }
         else
         {
             try
             {
-                _attachments.Add(await file.ToAttachmentAsync(MaxAttachmentSize));
+                var attachment = await file.ToAttachmentAsync(MaxAttachmentSize, MaxInlineSize);
+                _attachments.Add(attachment);
+                // A buffered file has released its stream already; a lazy one still needs it.
+                _staged[attachment.AttachmentId] = new StagedResources(
+                    attachment.ContentFactory is not null ? file.Content : null,
+                    file.PreviewUrl);
             }
             catch (Exception exception) when (IsReadFailure(exception))
             {
+                await ReleaseAsync(file.Content);
+                await RevokePreviewAsync(file.PreviewUrl);
                 await RejectAsync(file.Name, file.ContentType, file.Size, AttachmentRejectionReason.ReadFailed);
             }
         }
@@ -455,12 +706,46 @@
     [JSInvokable]
     public Task OnDragStateChanged(bool dragging)
     {
+        if (_disposed) return Task.CompletedTask;
         _dragging = dragging;
         return InvokeAsync(StateHasChanged);
     }
 
+    /// <remarks>
+    /// Buffers a small file and keeps a large one in the browser, to be read when the attachment is
+    /// opened. <paramref name="owner"/> is the browser stream behind <paramref name="open"/>, when
+    /// there is one, so it can be released with the attachment.
+    /// </remarks>
+    private async Task StageAsync(
+        string name,
+        string contentType,
+        long size,
+        Func<CancellationToken, ValueTask<Stream>> open,
+        string? previewUrl,
+        IJSStreamReference? owner)
+    {
+        Attachment attachment;
+        if (size <= MaxInlineSize)
+        {
+            await using var stream = await open(CancellationToken.None);
+            using var buffer = new MemoryStream((int)Math.Clamp(size, 0, int.MaxValue));
+            await stream.CopyToAsync(buffer);
+            attachment = ComposerFile.CreateAttachment(name, contentType, buffer.ToArray(), previewUrl);
+            await ReleaseAsync(owner);
+            owner = null;
+        }
+        else
+        {
+            attachment = ComposerFile.CreateLazyAttachment(name, contentType, size, open, previewUrl);
+        }
+
+        _attachments.Add(attachment);
+        _staged[attachment.AttachmentId] = new StagedResources(owner, previewUrl);
+    }
+
     private AttachmentRejectionReason? Check(string name, string contentType, long size)
     {
+        if (_attachments.Count >= MaxAttachments) return AttachmentRejectionReason.TooMany;
         if (!IsAccepted(name, contentType)) return AttachmentRejectionReason.TypeNotAllowed;
         if (size > MaxAttachmentSize) return AttachmentRejectionReason.TooLarge;
         return null;
@@ -472,9 +757,10 @@
     /// </remarks>
     private bool IsAccepted(string name, string contentType)
     {
-        if (string.IsNullOrWhiteSpace(Accept)) return true;
+        var accept = EffectiveAccept;
+        if (string.IsNullOrWhiteSpace(accept)) return true;
 
-        foreach (var token in Accept.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        foreach (var token in accept.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
         {
             var matches = token.StartsWith('.')
                 ? name.EndsWith(token, StringComparison.OrdinalIgnoreCase)
@@ -486,6 +772,23 @@
         }
 
         return false;
+    }
+
+    private string? AcceptFromCapabilities()
+    {
+        if (EffectiveCapabilities is not { } capabilities) return null;
+
+        var accepted = new List<string>(4);
+        if (capabilities.HasFlag(ModelCapabilities.Vision)) accepted.Add("image/*");
+        if (capabilities.HasFlag(ModelCapabilities.Audio)) accepted.Add("audio/*");
+        if (capabilities.HasFlag(ModelCapabilities.Documents))
+        {
+            accepted.Add("application/pdf");
+            accepted.Add(".pdf");
+            accepted.Add("text/*");
+        }
+
+        return accepted.Count == 0 ? null : string.Join(',', accepted);
     }
 
     private static bool IsReadFailure(Exception exception) => exception
@@ -503,7 +806,18 @@
         catch (JSDisconnectedException) { }
         catch (JSException) { }
         catch (ObjectDisposedException) { }
+        catch (OperationCanceledException) { }
     }
+
+    private async Task ReleaseAsync(StagedResources staged)
+    {
+        await ReleaseAsync(staged.Content);
+        await RevokePreviewAsync(staged.PreviewUrl);
+    }
+
+    private ValueTask RevokePreviewAsync(string? previewUrl) => string.IsNullOrEmpty(previewUrl)
+        ? ValueTask.CompletedTask
+        : Interop.InvokeVoidAsync("revokePreview", previewUrl);
 
     private async Task RejectAsync(string name, string contentType, long size, AttachmentRejectionReason reason)
     {
@@ -518,6 +832,7 @@
     private string RejectionMessage(AttachmentRejection rejection) => rejection.Reason switch
     {
         AttachmentRejectionReason.TooLarge => Strings.AttachmentTooLarge(rejection.FileName, MaxAttachmentSize),
+        AttachmentRejectionReason.TooMany => Strings.AttachmentTooMany(rejection.FileName, MaxAttachments),
         AttachmentRejectionReason.TypeNotAllowed => Strings.AttachmentTypeNotAllowed(rejection.FileName),
         _ => Strings.AttachmentReadFailed(rejection.FileName),
     };
@@ -534,6 +849,7 @@
         // Without a browser to ask, the caret is assumed to be at the end, where typing usually is.
         if (Value.AsSpan().IndexOfAny('/', '@') < 0) return;
         var caret = await Interop.InvokeAsync<int?>("getCaret", _textarea) ?? Value.Length;
+        if (_disposed) return;
 
         UpdateMenu(Math.Clamp(caret, 0, Value.Length));
     }
@@ -597,6 +913,7 @@
         {
             Value = prefix + suffix;
             await ValueChanged.InvokeAsync(Value);
+            await SaveDraftAsync();
             await handler();
             return;
         }
@@ -611,6 +928,7 @@
         Value = prefix + inserted + suffix;
         _pendingCaret = prefix.Length + inserted.Length;
         await ValueChanged.InvokeAsync(Value);
+        await SaveDraftAsync();
     }
 
     private string OptionId(int index) => $"{_menuId}-{index}";
@@ -625,10 +943,38 @@
     }
 
     /// <inheritdoc />
-    public void Dispose()
+    /// <remarks>
+    /// The renderer disposes a component through <see cref="IAsyncDisposable"/> only, so the browser
+    /// listeners, the staged files, and the object reference are all released here. Files already
+    /// submitted belong to their message and are left alone.
+    /// </remarks>
+    protected override async ValueTask DisposeCoreAsync()
     {
-        _self?.Dispose();
-        _self = null;
+        _disposed = true;
+
+        try
+        {
+            if (_registeredMaxSize is not null)
+            {
+                _registeredMaxSize = null;
+                await Interop.InvokeVoidAsync("unregisterPaste", _textarea);
+                await Interop.InvokeVoidAsync("unregisterDrop", _root);
+            }
+
+            if (_registeredSubmitOnEnter is not null)
+            {
+                _registeredSubmitOnEnter = null;
+                await Interop.InvokeVoidAsync("unregisterSubmitKey", _textarea);
+            }
+
+            foreach (var staged in _staged.Values) await ReleaseAsync(staged);
+            _staged.Clear();
+        }
+        finally
+        {
+            _self?.Dispose();
+            _self = null;
+        }
     }
 
     private sealed record MenuEntry(
@@ -637,6 +983,9 @@
         string? Icon,
         SlashCommand? Command,
         MentionItem? Mention);
+
+    /// <summary>What a staged attachment holds in the browser, to be released when it is discarded.</summary>
+    private sealed record StagedResources(IJSStreamReference? Content, string? PreviewUrl);
 }
 
 @code {

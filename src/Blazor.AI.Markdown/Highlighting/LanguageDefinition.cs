@@ -42,8 +42,11 @@ public sealed record LanguageDefinition
     /// <summary>Characters that delimit a string literal.</summary>
     public IReadOnlyList<char> StringDelimiters { get; init; } = ['"', '\''];
 
-    /// <summary>Whether a backslash escapes the next character inside a string.</summary>
+    /// <summary>Whether <see cref="StringEscapeCharacter"/> escapes the next character inside a string.</summary>
     public bool StringEscapes { get; init; } = true;
+
+    /// <summary>The character that escapes the next one inside a string: a backslash in most languages, a backtick in PowerShell.</summary>
+    public char StringEscapeCharacter { get; init; } = '\\';
 
     /// <summary>Whether a string literal may span lines.</summary>
     public bool MultiLineStrings { get; init; }
@@ -76,4 +79,17 @@ public sealed record LanguageDefinition
     /// of an address is not read as a comment.
     /// </summary>
     public bool UrlFunctions { get; init; }
+
+    /// <summary>
+    /// The character that introduces a variable, such as PowerShell's <c>$</c>. The sigil and the
+    /// name after it, or a braced name such as <c>${my var}</c>, are one variable token.
+    /// </summary>
+    public char? VariablePrefix { get; init; }
+
+    /// <summary>
+    /// Whether hyphenated words are commands and switches, as in PowerShell: <c>Get-ChildItem</c>
+    /// is a function and <c>-Recurse</c> a parameter, while a hyphenated word listed in
+    /// <see cref="Keywords"/>, such as <c>-eq</c>, is a keyword.
+    /// </summary>
+    public bool HyphenatedCommands { get; init; }
 }

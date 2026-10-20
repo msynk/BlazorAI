@@ -1,13 +1,13 @@
 @namespace Blazor.AI.Components
 @inherits AiComponentBase
-@implements IDisposable
 
 @*
     A multi-step agent run made legible: what it is trying to do, which step it is on, what each
     step produced, and what it needs from the user.
 
     The whole point of this component is that a spinner is not an acceptable answer to "what is it
-    doing". Every step is visible, with its own state and timing.
+    doing". Every step is visible, with its own state and timing, and the clock keeps moving while
+    the run does, so a stalled run looks stalled.
 *@
 
 <div class="bai-panel">
@@ -37,7 +37,7 @@
                      aria-valuenow="@((int)(progress * 100))" aria-valuemin="0" aria-valuemax="100">
                     <div class="bai-meter__fill" style="width:@($"{progress * 100:0}%")"></div>
                 </div>
-                <span>@Strings.FormatDuration(Run.Elapsed)</span>
+                <span class="bai-run__elapsed" aria-label="@Strings.Elapsed">@Strings.FormatDuration(Run.Elapsed)</span>
             </div>
         }
 
@@ -45,22 +45,37 @@
             @foreach (var step in Run.Steps)
             {
                 <li @key="step.StepId">
-                    <AgentStepView Step="step" />
+                    <AgentStepView Step="step" Conversation="Session?.Conversation" />
                 </li>
             }
         </ol>
 
         @if (Run.Status is AgentRunStatus.WaitingForInput && Run.PendingPrompt is { } prompt)
         {
-            <div class="bai-approval" style="border-radius:var(--bai-radius);margin-top:var(--bai-space-3)">
-                <div class="bai-approval__text">@prompt</div>
+            <div class="bai-approval bai-run__prompt" style="border-radius:var(--bai-radius);margin-top:var(--bai-space-3)">
+                <div class="bai-approval__text" id="@_promptId">@prompt</div>
                 @foreach (var suggestion in Run.PendingSuggestions ?? [])
                 {
-                    <button type="button" class="bai-btn bai-btn--outline"
+                    <button type="button" class="bai-btn bai-btn--outline" disabled="@_answering"
                             @onclick="() => RespondAsync(suggestion)">
                         @suggestion
                     </button>
                 }
+                @* Suggestions are shortcuts, not the only way through: the agent asked a question,
+                   and the user may have an answer nobody suggested. *@
+                <div class="bai-run__answer">
+                    <input class="bai-input" type="text" value="@_draft"
+                           placeholder="@Strings.AnswerPlaceholder"
+                           aria-labelledby="@_promptId"
+                           disabled="@_answering"
+                           @oninput="e => _draft = e.Value?.ToString() ?? string.Empty"
+                           @onkeydown="OnAnswerKeyDown" />
+                    <button type="button" class="bai-btn bai-btn--primary"
+                            disabled="@(_answering || string.IsNullOrWhiteSpace(_draft))"
+                            @onclick="() => RespondAsync(_draft)">
+                        @Strings.Answer
+                    </button>
+                </div>
             </div>
         }
 
@@ -74,41 +89,113 @@
 </div>
 
 @code {
+    private readonly string _promptId = $"bai-run-prompt-{Guid.NewGuid():N}";
+    private readonly object _gate = new();
     private AgentRun? _subscribed;
+    private System.Threading.Timer? _clock;
+    private bool _disposed;
+    private bool _answering;
+    private string _draft = string.Empty;
 
     /// <summary>The run to render.</summary>
     [Parameter, EditorRequired]
     public AgentRun Run { get; set; } = default!;
 
-    /// <summary>The session, used to answer a blocked run.</summary>
+    /// <summary>The session, used to answer a blocked run when <see cref="OnRespond"/> is not set.</summary>
     [Parameter]
     public ChatSession? Session { get; set; }
 
-    /// <summary>Raised when the user answers a pending question.</summary>
+    /// <summary>
+    /// Raised when the user answers a pending question. When set, the answer is handed to the
+    /// callback alone and the session is not called, so one answer is never delivered twice.
+    /// </summary>
     [Parameter]
     public EventCallback<string> OnRespond { get; set; }
+
+    /// <summary>How often the elapsed time is refreshed while the run is active.</summary>
+    [Parameter]
+    public TimeSpan ClockInterval { get; set; } = TimeSpan.FromSeconds(1);
 
     /// <inheritdoc />
     protected override void OnParametersSet()
     {
-        if (ReferenceEquals(_subscribed, Run)) return;
-        if (_subscribed is not null) _subscribed.Changed -= OnRunChanged;
-        _subscribed = Run;
-        _subscribed.Changed += OnRunChanged;
+        if (!ReferenceEquals(_subscribed, Run))
+        {
+            if (_subscribed is not null) _subscribed.Changed -= OnRunChanged;
+            _subscribed = Run;
+            _subscribed.Changed += OnRunChanged;
+            _draft = string.Empty;
+        }
+
+        SyncClock();
     }
 
-    private void OnRunChanged(AgentRun run) => RequestRender();
+    private void OnRunChanged(AgentRun run)
+    {
+        SyncClock();
+        RequestRender();
+    }
+
+    /// <summary>
+    /// Runs a clock while the run is in progress so the elapsed time moves, and stops it the moment
+    /// the run ends so a finished run costs nothing to keep on screen.
+    /// </summary>
+    private void SyncClock()
+    {
+        var active = !_disposed && Run.CompletedAt is null && Run.Status is not AgentRunStatus.Idle;
+
+        lock (_gate)
+        {
+            if (active && _clock is null && !_disposed)
+            {
+                _clock = new System.Threading.Timer(_ => RequestRender(), null, ClockInterval, ClockInterval);
+            }
+            else if (!active && _clock is not null)
+            {
+                _clock.Dispose();
+                _clock = null;
+            }
+        }
+    }
+
+    private Task OnAnswerKeyDown(KeyboardEventArgs e) =>
+        e.Key == "Enter" && !string.IsNullOrWhiteSpace(_draft) ? RespondAsync(_draft) : Task.CompletedTask;
 
     private async Task RespondAsync(string answer)
     {
-        await OnRespond.InvokeAsync(answer);
-        if (Session is not null) await Session.RespondToAgentAsync(Run.RunId, answer);
+        if (_answering || string.IsNullOrWhiteSpace(answer)) return;
+        _answering = true;
+
+        try
+        {
+            // Either the application's callback or the session, never both: with both wired a single
+            // tap would resolve the run twice and append the answer twice.
+            if (OnRespond.HasDelegate) await OnRespond.InvokeAsync(answer);
+            else if (Session is not null) await Session.RespondToAgentAsync(Run.RunId, answer);
+            _draft = string.Empty;
+        }
+        finally
+        {
+            _answering = false;
+        }
     }
 
     /// <inheritdoc />
-    public void Dispose()
+    /// <remarks>
+    /// Cleanup lives here rather than in <see cref="IDisposable.Dispose"/> because the renderer only
+    /// calls the asynchronous disposal on a component that offers it.
+    /// </remarks>
+    protected override ValueTask DisposeCoreAsync()
     {
+        _disposed = true;
+        lock (_gate)
+        {
+            _clock?.Dispose();
+            _clock = null;
+        }
+
         if (_subscribed is not null) _subscribed.Changed -= OnRunChanged;
         _subscribed = null;
+        return ValueTask.CompletedTask;
     }
 }

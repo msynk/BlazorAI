@@ -25,6 +25,8 @@
                      HideSystemMessages="HideSystemMessages"
                      PinnedChanged="OnPinnedChanged"
                      OnCitationClick="OnCitationClick"
+                     OnSourceClick="OnSourceClick"
+                     OnFeedback="OnFeedback"
                      Header="ListHeader"
                      Footer="ListFooter">
             <EmptyContent>
@@ -112,6 +114,14 @@
     /// <summary>Raised when the user activates a citation.</summary>
     [Parameter]
     public EventCallback<Citation> OnCitationClick { get; set; }
+
+    /// <summary>Raised when the user activates a source card.</summary>
+    [Parameter]
+    public EventCallback<CitationSource> OnSourceClick { get; set; }
+
+    /// <summary>Raised when the user records feedback on a reply, so a host can persist it.</summary>
+    [Parameter]
+    public EventCallback<MessageFeedback> OnFeedback { get; set; }
 
     /// <summary>Replaces how a message is rendered.</summary>
     [Parameter]
@@ -220,6 +230,21 @@
     protected override void OnParametersSet()
     {
         if (UiOptions is not null) CascadedOptions = UiOptions;
+
+        // A different Conversation parameter on an owned session means the host switched threads:
+        // replace the owned session rather than keep driving the old conversation.
+        if (Session is null && _owned is not null && Conversation is not null && !ReferenceEquals(_owned.Conversation, Conversation))
+        {
+            var stale = _owned;
+            _owned = null;
+            if (ReferenceEquals(_attached, stale))
+            {
+                stale.StateChanged -= OnSessionStateChanged;
+                _attached = null;
+            }
+
+            _ = stale.DisposeAsync().AsTask();
+        }
 
         var session = ActiveSession;
         if (ReferenceEquals(_attached, session)) return;

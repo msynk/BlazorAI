@@ -111,11 +111,29 @@ public sealed class AiInterop : IAsyncDisposable, IDisposable
         {
             await module.InvokeVoidAsync(identifier, args).ConfigureAwait(false);
         }
-        catch (JSDisconnectedException) { }
-        catch (JSException) { }
-        catch (ObjectDisposedException) { }
-        catch (TaskCanceledException) { }
+        catch (Exception exception) when (IsExpected(exception)) { }
     }
+
+    /// <summary>
+    /// Whether an exception from a browser call means only that the browser is unreachable or the
+    /// call was abandoned: a lost circuit, a disposed module, a cancelled call at teardown, or a
+    /// JavaScript error, none of which should take a component down with it.
+    /// </summary>
+    /// <param name="exception">The exception a browser call threw.</param>
+    /// <returns><see langword="true"/> when the exception should be swallowed.</returns>
+    /// <remarks>
+    /// <see cref="JSDisconnectedException"/> is not a <see cref="JSException"/>, and
+    /// <see cref="OperationCanceledException"/> is what a circuit tearing down surfaces, so both need
+    /// naming alongside the rest. Components awaiting interop in a render or dispose path use this
+    /// filter too, so the set of expected failures lives in one place.
+    /// </remarks>
+    public static bool IsExpected(Exception exception) => exception switch
+    {
+        JSDisconnectedException or JSException or ObjectDisposedException or OperationCanceledException => true,
+        // "JavaScript interop calls cannot be issued at this time": the page is still prerendering.
+        InvalidOperationException invalid => invalid.Message.Contains("JavaScript interop", StringComparison.Ordinal),
+        _ => false,
+    };
 
     /// <summary>Invokes a module function that returns a value.</summary>
     /// <typeparam name="T">The return type.</typeparam>
@@ -131,10 +149,10 @@ public sealed class AiInterop : IAsyncDisposable, IDisposable
         {
             return await module.InvokeAsync<T>(identifier, args).ConfigureAwait(false);
         }
-        catch (JSDisconnectedException) { return default; }
-        catch (JSException) { return default; }
-        catch (ObjectDisposedException) { return default; }
-        catch (TaskCanceledException) { return default; }
+        catch (Exception exception) when (IsExpected(exception))
+        {
+            return default;
+        }
     }
 
     /// <summary>Copies text to the clipboard.</summary>
@@ -189,9 +207,6 @@ public sealed class AiInterop : IAsyncDisposable, IDisposable
         {
             await module.DisposeAsync().ConfigureAwait(false);
         }
-        catch (JSDisconnectedException) { }
-        catch (JSException) { }
-        catch (ObjectDisposedException) { }
-        catch (OperationCanceledException) { }
+        catch (Exception exception) when (IsExpected(exception)) { }
     }
 }

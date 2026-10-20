@@ -1,5 +1,6 @@
 @namespace Blazor.AI.Components
 @inherits AiComponentBase
+@using System.Globalization
 
 @*
     A form the model proposed, for the user to check and submit.
@@ -7,6 +8,10 @@
     Validation happens here rather than in the model, because a model asked to validate its own
     output will sometimes say yes when the answer is no. Fields appear as they stream in, so a form
     generated field by field fills in rather than blinking into existence.
+
+    Values are kept flat, keyed by path ("address.city", "tags[0]", "people[1].name"), which is what
+    lets a nested object or a repeatable group stream in field by field like a flat form does. The
+    definition turns the flat values back into JSON of the schema's shape on submit.
 *@
 
 <div class="bai-form @Class">
@@ -20,31 +25,7 @@
         <div class="bai-field__hint">@description</div>
     }
 
-    @foreach (var field in Definition.Fields)
-    {
-        var error = _errors.GetValueOrDefault(field.Name);
-        <div class="bai-field @(error is not null ? "bai-field--invalid" : null)" @key="field.Name">
-            <label class="bai-field__label" for="@FieldId(field)">
-                @field.DisplayLabel
-                @if (field.Required)
-                {
-                    <span aria-hidden="true" style="color:var(--bai-color-danger)"> *</span>
-                }
-            </label>
-
-            @RenderControl(field, error)
-
-            @if (field.Description is { Length: > 0 } hint)
-            {
-                <span class="bai-field__hint">@hint</span>
-            }
-
-            @if (error is not null)
-            {
-                <span class="bai-field__error" role="alert">@error</span>
-            }
-        </div>
-    }
+    @RenderFields(Definition.Fields, null)
 
     @if (!Submitted)
     {
@@ -72,16 +53,26 @@
 @code {
     private readonly Dictionary<string, string?> _values = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _errors = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, AiFormField> _seeded = new(StringComparer.Ordinal);
     private readonly string _id = $"bai-form-{Guid.NewGuid():N}";
-    private int _seededFieldCount;
 
     /// <summary>The form to render.</summary>
     [Parameter, EditorRequired]
     public AiFormDefinition Definition { get; set; } = default!;
 
-    /// <summary>Raised with the collected values when the user submits a valid form.</summary>
+    /// <summary>
+    /// Raised with the collected values when the user submits a valid form. Values are flat text,
+    /// keyed by field path; see <see cref="OnSubmitJson"/> for the typed, nested shape.
+    /// </summary>
     [Parameter]
     public EventCallback<IReadOnlyDictionary<string, string?>> OnSubmit { get; set; }
+
+    /// <summary>
+    /// Raised with the values as JSON in the shape of the schema the form came from: nested objects,
+    /// arrays, numbers and booleans encoded as such. Raised after <see cref="OnSubmit"/>.
+    /// </summary>
+    [Parameter]
+    public EventCallback<JsonElement> OnSubmitJson { get; set; }
 
     /// <summary>Raised when the user cancels.</summary>
     [Parameter]
@@ -99,63 +90,375 @@
     [Parameter]
     public string? Class { get; set; }
 
-    /// <summary>The values as they currently stand.</summary>
+    /// <summary>The values as they currently stand, keyed by field path.</summary>
     public IReadOnlyDictionary<string, string?> Values => _values;
 
     /// <inheritdoc />
     protected override void OnParametersSet()
     {
-        // Seed only fields that have appeared since the last pass, so a field streaming in later
-        // never overwrites something the user has already typed.
-        if (Definition.Fields.Count == _seededFieldCount) return;
-
+        // Seed each field once, so a field streaming in later never overwrites something the user
+        // has already typed. A field whose definition changed shape (a different schema reusing the
+        // name, or a new prefill) is seeded again, and fields that vanished take their values along.
+        var names = new HashSet<string>(StringComparer.Ordinal);
         foreach (var field in Definition.Fields)
         {
-            if (!_values.ContainsKey(field.Name)) _values[field.Name] = field.Value;
+            names.Add(field.Name);
+            if (_seeded.TryGetValue(field.Name, out var previous))
+            {
+                if (AiFormField.SameShape(previous, field)) continue;
+                Prune(field.Name);
+            }
+
+            _seeded[field.Name] = field;
+            Seed(field, field.Name);
         }
 
-        _seededFieldCount = Definition.Fields.Count;
+        foreach (var stale in _seeded.Keys.Where(k => !names.Contains(k)).ToList())
+        {
+            _seeded.Remove(stale);
+            Prune(stale);
+        }
     }
 
-    private string FieldId(AiFormField field) => $"{_id}-{field.Name}";
-
-    private RenderFragment RenderControl(AiFormField field, string? error) => __builder =>
+    private void Seed(AiFormField field, string path)
     {
-        var id = FieldId(field);
-        var value = _values.GetValueOrDefault(field.Name);
+        switch (field.Type)
+        {
+            case AiFieldType.Object:
+                foreach (var child in field.Fields ?? []) Seed(child, AiFormDefinition.Path(path, child.Name));
+                break;
+
+            case AiFieldType.Array:
+                if (field.Value is { Length: > 0 } json && TryParseJson(json) is { ValueKind: JsonValueKind.Array } array)
+                {
+                    SeedFromJson(field, path, array);
+                }
+                break;
+
+            default:
+                _values[path] = field.Value;
+                break;
+        }
+    }
+
+    private void SeedFromJson(AiFormField field, string path, JsonElement element)
+    {
+        switch (field.Type)
+        {
+            case AiFieldType.Object:
+                foreach (var child in field.Fields ?? [])
+                {
+                    var childPath = AiFormDefinition.Path(path, child.Name);
+                    if (element.ValueKind is JsonValueKind.Object && element.TryGetProperty(child.Name, out var value))
+                    {
+                        SeedFromJson(child, childPath, value);
+                    }
+                    else
+                    {
+                        Seed(child, childPath);
+                    }
+                }
+                break;
+
+            case AiFieldType.Array:
+                if (element.ValueKind is not JsonValueKind.Array) break;
+                var template = field.Items ?? new AiFormField("item");
+                var index = 0;
+                foreach (var entry in element.EnumerateArray())
+                {
+                    SeedFromJson(template, AiFormDefinition.IndexPath(path, index++), entry);
+                }
+                break;
+
+            default:
+                _values[path] = element.ValueKind switch
+                {
+                    JsonValueKind.Null or JsonValueKind.Undefined => null,
+                    JsonValueKind.String => element.GetString(),
+                    _ => element.GetRawText(),
+                };
+                break;
+        }
+    }
+
+    private static JsonElement? TryParseJson(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return document.RootElement.Clone();
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Removes the value and error of a path and of everything nested under it.</summary>
+    private void Prune(string path)
+    {
+        foreach (var key in _values.Keys.Where(k => IsWithin(k, path)).ToList()) _values.Remove(key);
+        foreach (var key in _errors.Keys.Where(k => IsWithin(k, path)).ToList()) _errors.Remove(key);
+    }
+
+    private static bool IsWithin(string key, string path) =>
+        key == path
+        || (key.Length > path.Length && key.StartsWith(path, StringComparison.Ordinal) && key[path.Length] is '.' or '[');
+
+    /// <summary>
+    /// A DOM id for a field. Paths come from model-written property names, so anything outside the
+    /// characters an id selector accepts is replaced, and a stable hash keeps two different names
+    /// that sanitise alike from colliding.
+    /// </summary>
+    internal string FieldId(string path)
+    {
+        var changed = false;
+        var builder = new System.Text.StringBuilder(path.Length);
+        foreach (var c in path)
+        {
+            if (char.IsAsciiLetterOrDigit(c) || c is '_' or '-')
+            {
+                builder.Append(c);
+            }
+            else
+            {
+                builder.Append('_');
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            uint hash = 2166136261;
+            foreach (var c in path) hash = (hash ^ c) * 16777619;
+            builder.Append('-').Append(hash.ToString("x8", CultureInfo.InvariantCulture));
+        }
+
+        return $"{_id}-{builder}";
+    }
+
+    private RenderFragment RenderFields(IReadOnlyList<AiFormField> fields, string? parent) => __builder =>
+    {
+        foreach (var field in fields)
+        {
+            @RenderField(field, AiFormDefinition.Path(parent, field.Name))
+        }
+    };
+
+    private RenderFragment RenderField(AiFormField field, string path) => __builder =>
+    {
+        var error = _errors.GetValueOrDefault(path);
+        var id = FieldId(path);
+
+        switch (field.Type)
+        {
+            case AiFieldType.Object:
+                <fieldset class="bai-field bai-fieldset" id="@id" @key="path">
+                    <legend class="bai-field__label">@field.DisplayLabel</legend>
+                    @if (field.Description is { Length: > 0 } groupHint)
+                    {
+                        <span class="bai-field__hint">@groupHint</span>
+                    }
+                    @RenderFields(field.Fields ?? [], path)
+                </fieldset>
+                break;
+
+            case AiFieldType.Array:
+                @RenderArray(field, path, id, error)
+                break;
+
+            default:
+                <div class="bai-field @(error is not null ? "bai-field--invalid" : null)" @key="path">
+                    <label class="bai-field__label" for="@id">
+                        @field.DisplayLabel
+                        @if (field.Required)
+                        {
+                            <span aria-hidden="true" style="color:var(--bai-color-danger)"> *</span>
+                        }
+                    </label>
+
+                    @RenderControl(field, path, id, error, null)
+
+                    @if (field.Description is { Length: > 0 } hint)
+                    {
+                        <span class="bai-field__hint" id="@(id)-hint">@hint</span>
+                    }
+
+                    @if (error is not null)
+                    {
+                        <span class="bai-field__error" id="@(id)-error" role="alert">@error</span>
+                    }
+                </div>
+                break;
+        }
+    };
+
+    private RenderFragment RenderArray(AiFormField field, string path, string id, string? error) => __builder =>
+    {
+        var template = field.Items ?? new AiFormField("item");
+        var count = AiFormDefinition.CountItems(_values, path);
+        var canAdd = !field.ReadOnly && (field.MaxItems is not { } max || count < max);
+
+        <fieldset class="bai-field bai-fieldset @(error is not null ? "bai-field--invalid" : null)" id="@id" @key="path"
+                  aria-describedby="@DescribedBy(id, field.Description is { Length: > 0 }, error is not null)">
+            <legend class="bai-field__label">
+                @field.DisplayLabel
+                @if (field.Required)
+                {
+                    <span aria-hidden="true" style="color:var(--bai-color-danger)"> *</span>
+                }
+            </legend>
+
+            @if (field.Description is { Length: > 0 } hint)
+            {
+                <span class="bai-field__hint" id="@(id)-hint">@hint</span>
+            }
+
+            @for (var i = 0; i < count; i++)
+            {
+                var index = i;
+                var itemPath = AiFormDefinition.IndexPath(path, index);
+                var itemError = _errors.GetValueOrDefault(itemPath);
+                var itemLabel = $"{field.DisplayLabel} {index + 1}";
+
+                <div class="bai-form__item @(itemError is not null ? "bai-field--invalid" : null)" @key="itemPath">
+                    <div class="bai-form__item-body">
+                        @if (template.Type is AiFieldType.Object)
+                        {
+                            @RenderFields(template.Fields ?? [], itemPath)
+                        }
+                        else
+                        {
+                            @RenderControl(template, itemPath, FieldId(itemPath), itemError, itemLabel)
+                            @if (itemError is not null)
+                            {
+                                <span class="bai-field__error" id="@(FieldId(itemPath))-error" role="alert">@itemError</span>
+                            }
+                        }
+                    </div>
+                    @if (!field.ReadOnly)
+                    {
+                        <button type="button" class="bai-btn bai-btn--icon bai-form__remove"
+                                aria-label="@Strings.RemoveItem(field.DisplayLabel, index + 1)"
+                                title="@Strings.RemoveItem(field.DisplayLabel, index + 1)"
+                                @onclick="() => RemoveItem(path, index)">
+                            <AiIcon Name="close" />
+                        </button>
+                    }
+                </div>
+            }
+
+            @if (canAdd)
+            {
+                <div>
+                    <button type="button" class="bai-btn bai-btn--outline bai-form__add" @onclick="() => AddItem(field, path)">
+                        @Strings.AddItem
+                    </button>
+                </div>
+            }
+
+            @if (error is not null)
+            {
+                <span class="bai-field__error" id="@(id)-error" role="alert">@error</span>
+            }
+        </fieldset>
+    };
+
+    private RenderFragment RenderControl(AiFormField field, string path, string id, string? error, string? ariaLabel) => __builder =>
+    {
+        var value = _values.GetValueOrDefault(path);
+        var describedBy = DescribedBy(id, ariaLabel is null && field.Description is { Length: > 0 }, error is not null);
+        var invalid = error is not null ? "true" : null;
+        var required = field.Required ? "true" : null;
 
         switch (field.Type)
         {
             case AiFieldType.Boolean:
                 <input id="@id" type="checkbox" class="bai-task-list__box"
                        checked="@IsTrue(value)"
-                       @onchange="e => Set(field.Name, ToBoolText(e.Value))" />
+                       disabled="@field.ReadOnly"
+                       aria-label="@ariaLabel"
+                       aria-invalid="@invalid"
+                       aria-required="@required"
+                       aria-describedby="@describedBy"
+                       @onchange="e => Set(path, ToBoolText(e.Value))" />
                 break;
 
             case AiFieldType.Select:
                 <select id="@id" class="bai-select" value="@value"
-                        @onchange="e => Set(field.Name, e.Value?.ToString())">
+                        disabled="@field.ReadOnly"
+                        required="@field.Required"
+                        aria-label="@ariaLabel"
+                        aria-invalid="@invalid"
+                        aria-required="@required"
+                        aria-describedby="@describedBy"
+                        @onchange="e => Set(path, e.Value?.ToString())">
                     <option value=""></option>
-                    @foreach (var option in field.Options ?? [])
-                    {
-                        <option value="@option">@option</option>
+                    @{
+                        var options = field.Options ?? [];
+                        for (var i = 0; i < options.Count; i++)
+                        {
+                            var option = options[i];
+                            var label = field.OptionLabels is { } labels && i < labels.Count ? labels[i] : option;
+                            <option value="@option">@label</option>
+                        }
                     }
                 </select>
                 break;
 
             case AiFieldType.MultilineText:
                 <textarea id="@id" class="bai-textarea" rows="4" placeholder="@field.Placeholder"
-                          @oninput="e => Set(field.Name, e.Value?.ToString())">@value</textarea>
+                          readonly="@field.ReadOnly"
+                          required="@field.Required"
+                          minlength="@field.MinLength"
+                          maxlength="@field.MaxLength"
+                          aria-label="@ariaLabel"
+                          aria-invalid="@invalid"
+                          aria-required="@required"
+                          aria-describedby="@describedBy"
+                          @oninput="e => Set(path, e.Value?.ToString())">@value</textarea>
+                break;
+
+            case AiFieldType.Number:
+                <input id="@id" class="bai-input" type="number" value="@value"
+                       placeholder="@field.Placeholder"
+                       readonly="@field.ReadOnly"
+                       required="@field.Required"
+                       min="@Invariant(field.Minimum ?? field.ExclusiveMinimum)"
+                       max="@Invariant(field.Maximum ?? field.ExclusiveMaximum)"
+                       step="@(field.MultipleOf is { } step ? Invariant(step) : field.Integer ? "1" : "any")"
+                       aria-label="@ariaLabel"
+                       aria-invalid="@invalid"
+                       aria-required="@required"
+                       aria-describedby="@describedBy"
+                       @oninput="e => Set(path, e.Value?.ToString())" />
                 break;
 
             default:
                 <input id="@id" class="bai-input" type="@InputType(field.Type)" value="@value"
                        placeholder="@field.Placeholder"
+                       readonly="@field.ReadOnly"
                        required="@field.Required"
-                       @oninput="e => Set(field.Name, e.Value?.ToString())" />
+                       minlength="@field.MinLength"
+                       maxlength="@field.MaxLength"
+                       aria-label="@ariaLabel"
+                       aria-invalid="@invalid"
+                       aria-required="@required"
+                       aria-describedby="@describedBy"
+                       @oninput="e => Set(path, e.Value?.ToString())" />
                 break;
         }
     };
+
+    private static string? DescribedBy(string id, bool hasHint, bool hasError) => (hasHint, hasError) switch
+    {
+        (true, true) => $"{id}-hint {id}-error",
+        (true, false) => $"{id}-hint",
+        (false, true) => $"{id}-error",
+        _ => null,
+    };
+
+    private static string? Invariant(double? value) => value?.ToString("R", CultureInfo.InvariantCulture);
 
     private static bool IsTrue(string? value) => string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
 
@@ -166,22 +469,71 @@
         AiFieldType.Number => "number",
         AiFieldType.Date => "date",
         AiFieldType.DateTime => "datetime-local",
+        AiFieldType.Time => "time",
         AiFieldType.Email => "email",
         AiFieldType.Url => "url",
         AiFieldType.Password => "password",
         _ => "text",
     };
 
-    private void Set(string name, string? value)
+    private void Set(string path, string? value)
     {
-        _values[name] = value;
-        _errors.Remove(name);
+        _values[path] = value;
+        _errors.Remove(path);
+    }
+
+    private void AddItem(AiFormField field, string path)
+    {
+        var index = AiFormDefinition.CountItems(_values, path);
+        var template = field.Items ?? new AiFormField("item");
+        var itemPath = AiFormDefinition.IndexPath(path, index);
+
+        // An entry must leave a trace in the values even before anything is typed, or it would not
+        // be counted and the next add would land on the same index.
+        if (template.Type is AiFieldType.Object)
+        {
+            foreach (var child in template.Fields ?? []) Seed(child, AiFormDefinition.Path(itemPath, child.Name));
+            if (!_values.Keys.Any(k => IsWithin(k, itemPath))) _values[itemPath] = null;
+        }
+        else
+        {
+            _values[itemPath] = template.Value;
+        }
+
+        _errors.Remove(path);
+    }
+
+    private void RemoveItem(string path, int index)
+    {
+        var count = AiFormDefinition.CountItems(_values, path);
+        Prune(AiFormDefinition.IndexPath(path, index));
+
+        // Shift everything after the removed entry down one slot so the entries stay contiguous.
+        for (var i = index + 1; i < count; i++)
+        {
+            var from = AiFormDefinition.IndexPath(path, i);
+            var to = AiFormDefinition.IndexPath(path, i - 1);
+            foreach (var key in _values.Keys.Where(k => IsWithin(k, from)).ToList())
+            {
+                _values[string.Concat(to, key.AsSpan(from.Length))] = _values[key];
+                _values.Remove(key);
+            }
+
+            foreach (var key in _errors.Keys.Where(k => IsWithin(k, from)).ToList())
+            {
+                _errors[string.Concat(to, key.AsSpan(from.Length))] = _errors[key];
+                _errors.Remove(key);
+            }
+        }
+
+        _errors.Remove(path);
     }
 
     private async Task SubmitAsync()
     {
         if (!Validate()) return;
         await OnSubmit.InvokeAsync(new Dictionary<string, string?>(_values, StringComparer.Ordinal));
+        if (OnSubmitJson.HasDelegate) await OnSubmitJson.InvokeAsync(Definition.ToJson(_values));
     }
 
     private Task CancelAsync() => OnCancel.InvokeAsync();
@@ -189,57 +541,134 @@
     private bool Validate()
     {
         _errors.Clear();
-
-        foreach (var field in Definition.Fields)
-        {
-            var value = _values.GetValueOrDefault(field.Name);
-
-            if (field.Required && string.IsNullOrWhiteSpace(value) && field.Type is not AiFieldType.Boolean)
-            {
-                _errors[field.Name] = Strings.FieldRequired(field.DisplayLabel);
-                continue;
-            }
-
-            if (string.IsNullOrWhiteSpace(value)) continue;
-
-            if (field.Type is AiFieldType.Number)
-            {
-                // A number input always reports its value in invariant form ("1.5"), whatever the
-                // page culture, so parsing with the current culture would read it as 15 in de-DE.
-                if (!double.TryParse(value, System.Globalization.NumberStyles.Float,
-                        System.Globalization.CultureInfo.InvariantCulture, out var number))
-                {
-                    _errors[field.Name] = Strings.FieldNotANumber(field.DisplayLabel);
-                    continue;
-                }
-
-                if (field.Minimum is { } min && number < min)
-                {
-                    _errors[field.Name] = Strings.FieldBelowMinimum(field.DisplayLabel, min);
-                    continue;
-                }
-
-                if (field.Maximum is { } max && number > max)
-                {
-                    _errors[field.Name] = Strings.FieldAboveMaximum(field.DisplayLabel, max);
-                    continue;
-                }
-            }
-
-            if (field.Type is AiFieldType.Email && !value.Contains('@'))
-            {
-                _errors[field.Name] = Strings.FieldNotAnEmail(field.DisplayLabel);
-                continue;
-            }
-
-            if (field.Pattern is { Length: > 0 } pattern && !IsMatch(value, pattern))
-            {
-                _errors[field.Name] = Strings.FieldInvalidFormat(field.DisplayLabel);
-            }
-        }
-
+        ValidateFields(Definition.Fields, null);
         return _errors.Count == 0;
     }
+
+    private void ValidateFields(IReadOnlyList<AiFormField> fields, string? parent)
+    {
+        foreach (var field in fields) ValidateField(field, AiFormDefinition.Path(parent, field.Name));
+    }
+
+    private void ValidateField(AiFormField field, string path)
+    {
+        switch (field.Type)
+        {
+            case AiFieldType.Object:
+                ValidateFields(field.Fields ?? [], path);
+                break;
+
+            case AiFieldType.Array:
+                var count = AiFormDefinition.CountItems(_values, path);
+                if (count == 0 && field.Required)
+                {
+                    _errors[path] = Strings.FieldRequired(field.DisplayLabel);
+                    break;
+                }
+
+                if (field.MinItems is { } minItems && count < minItems)
+                {
+                    _errors[path] = Strings.FieldTooFewItems(field.DisplayLabel, minItems);
+                }
+                else if (field.MaxItems is { } maxItems && count > maxItems)
+                {
+                    _errors[path] = Strings.FieldTooManyItems(field.DisplayLabel, maxItems);
+                }
+
+                var template = field.Items ?? new AiFormField("item");
+                for (var i = 0; i < count; i++)
+                {
+                    var itemPath = AiFormDefinition.IndexPath(path, i);
+                    if (template.Type is AiFieldType.Object)
+                    {
+                        ValidateFields(template.Fields ?? [], itemPath);
+                    }
+                    else
+                    {
+                        ValidateScalar(template with { Label = $"{field.DisplayLabel} {i + 1}", Required = true }, itemPath);
+                    }
+                }
+                break;
+
+            default:
+                ValidateScalar(field, path);
+                break;
+        }
+    }
+
+    private void ValidateScalar(AiFormField field, string path)
+    {
+        var value = _values.GetValueOrDefault(path);
+        var label = field.DisplayLabel;
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            if (field.Required && field.Type is not AiFieldType.Boolean) _errors[path] = Strings.FieldRequired(label);
+            return;
+        }
+
+        string? error = field.Type switch
+        {
+            AiFieldType.Number => ValidateNumber(field, value),
+            AiFieldType.Email when !IsEmail(value) => Strings.FieldNotAnEmail(label),
+            AiFieldType.Url when !Uri.TryCreate(value.Trim(), UriKind.Absolute, out _) => Strings.FieldNotAUrl(label),
+            AiFieldType.Date or AiFieldType.DateTime or AiFieldType.Time when !IsDateOrTime(field.Type, value) => Strings.FieldNotADate(label),
+            AiFieldType.Select when field.Options is { } options && !options.Contains(value, StringComparer.Ordinal) => Strings.FieldInvalidFormat(label),
+            _ => null,
+        };
+
+        if (error is null && field.Type is AiFieldType.Text or AiFieldType.MultilineText or AiFieldType.Email or AiFieldType.Url or AiFieldType.Password)
+        {
+            if (field.MinLength is { } minLength && value.Length < minLength) error = Strings.FieldTooShort(label, minLength);
+            else if (field.MaxLength is { } maxLength && value.Length > maxLength) error = Strings.FieldTooLong(label, maxLength);
+        }
+
+        if (error is null && field.Pattern is { Length: > 0 } pattern && !IsMatch(value, pattern))
+        {
+            error = Strings.FieldInvalidFormat(label);
+        }
+
+        if (error is not null) _errors[path] = error;
+    }
+
+    private string? ValidateNumber(AiFormField field, string value)
+    {
+        var label = field.DisplayLabel;
+
+        // A number input always reports its value in invariant form ("1.5"), whatever the page
+        // culture, so parsing with the current culture would read it as 15 in de-DE.
+        if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) || !double.IsFinite(number))
+        {
+            return Strings.FieldNotANumber(label);
+        }
+
+        if (field.Integer && Math.Abs(number - Math.Round(number)) > 0) return Strings.FieldNotAnInteger(label);
+        if (field.Minimum is { } min && number < min) return Strings.FieldBelowMinimum(label, min);
+        if (field.Maximum is { } max && number > max) return Strings.FieldAboveMaximum(label, max);
+        if (field.ExclusiveMinimum is { } exMin && number <= exMin) return Strings.FieldNotAboveMinimum(label, exMin);
+        if (field.ExclusiveMaximum is { } exMax && number >= exMax) return Strings.FieldNotBelowMaximum(label, exMax);
+
+        if (field.MultipleOf is { } step && step > 0)
+        {
+            var quotient = number / step;
+            if (Math.Abs(quotient - Math.Round(quotient)) > 1e-9) return Strings.FieldNotAMultipleOf(label, step);
+        }
+
+        return null;
+    }
+
+    private static bool IsEmail(string value)
+    {
+        var at = value.IndexOf('@');
+        return at > 0 && at < value.Length - 1 && value.IndexOf('@', at + 1) < 0 && !value.Any(char.IsWhiteSpace);
+    }
+
+    private static bool IsDateOrTime(AiFieldType type, string value) => type switch
+    {
+        AiFieldType.Date => DateOnly.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out _),
+        AiFieldType.Time => TimeOnly.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out _),
+        _ => DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out _),
+    };
 
     /// <remarks>
     /// A model can produce a pattern that backtracks catastrophically, so matching runs under a

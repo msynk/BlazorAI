@@ -55,6 +55,9 @@ public enum TokenKind
 
     /// <summary>A lifetime or loop label, such as Rust's <c>'a</c> or <c>'outer</c>.</summary>
     Label = 16,
+
+    /// <summary>A variable introduced by a sigil, such as PowerShell's <c>$name</c>.</summary>
+    Variable = 17,
 }
 
 /// <summary>

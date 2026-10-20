@@ -57,8 +57,10 @@ Registration is the boundary, and it is deliberately narrow.
   type.
 - **Only declared parameters bind.** The bindable set is derived from public `[Parameter]`
   properties, minus the ones no model should ever set: delegates, `EventCallback`, `RenderFragment`,
-  and unmatched-attribute catch-alls. That exclusion is what stops a payload from wiring up handlers
-  or injecting attributes.
+  `Type`, unmatched-attribute catch-alls, anything marked `[GenerativeIgnore]`, and any parameter
+  whose type's object graph reaches one of those (a record with an `Action` property is excluded
+  whole, as is a `List<>` of it). That exclusion is what stops a payload from wiring up handlers or
+  injecting attributes. `GenerativeUiRegistry.IsBindable(Type)` answers the question for any type.
 - **Unknown properties are ignored**, not passed through. They are not errors and do not make a
   binding incomplete, since models routinely add a property nobody asked for, but they are listed
   in the bind result's `IgnoredProperties` for diagnostics.
@@ -75,6 +77,56 @@ var schema = registry.DescribeAll();
 That produces a JSON Schema with one variant per registered component, each pinning the component
 name and describing its properties. Put it in the system prompt or use it as the schema of a render
 tool. Without it the model guesses names, and every guess renders a placeholder.
+
+### What the schema covers
+
+Every parameter type is described the way the binder reads it, so a model that follows the schema
+produces a payload that binds:
+
+| CLR type | Schema |
+| --- | --- |
+| `string`, `char` | `string` |
+| `bool` | `boolean` |
+| `int`, `long`, `short`, `byte` and unsigned kin | `integer` |
+| `double`, `float`, `decimal` | `number` |
+| enums | `string` with `enum` listing the names (integers still bind) |
+| `DateTime`, `DateTimeOffset` | `string`, `format: date-time` |
+| `DateOnly` / `TimeOnly` / `TimeSpan` | `string` with `format` `date` / `time` / `duration` |
+| `Guid` / `Uri` | `string` with `format` `uuid` / `uri` |
+| arrays, `List<T>`, `IEnumerable<T>` | `array` with `items` describing `T` |
+| dictionaries | `object` with `additionalProperties` describing the value type |
+| records and classes | `object` with nested `properties`, `additionalProperties: false`, and `required` for members marked `[Required]` |
+| `JsonElement`, `JsonNode`, `object` | an open schema; the value is handed over as it came |
+
+Nested types are walked recursively to a bounded depth, and a type already on the path (a folder
+whose children are folders) is cut off as a plain `object`, so a self-referencing model neither
+recurses forever nor produces an infinite schema. A `Nullable<T>` is described as `T` and is not
+required.
+
+### Attributes
+
+```csharp
+[Description("Shows an invoice with its lines.")]       // fallback when Register() gives no description
+public partial class InvoiceCard
+{
+    [Parameter, Required]                                // required without naming it at registration
+    public string Customer { get; set; } = string.Empty;
+
+    [Parameter, Description("One row per billed item.")] // carried into the schema
+    public Line[] Lines { get; set; } = [];
+
+    [Parameter, GenerativeIgnore]                        // the application sets this, never the model
+    public string TenantKey { get; set; } = string.Empty;
+}
+```
+
+`DescriptionAttribute` on a property, on a nested type's members, or on the component class itself
+is carried into the schema. `[Required]` (DataAnnotations) marks a parameter or a nested member
+required, in addition to the names passed to `Register`. `[GenerativeIgnore]` removes a parameter
+or a nested member from both the schema and the bindable set.
+
+A payload that never became an object, because the stream ended early or sent an array, binds
+nothing and reports every required property as missing, so `IsComplete` is never true by accident.
 
 ## Streaming properties
 
@@ -120,13 +172,36 @@ inferred, the model proposes a form, the user corrects it, and the corrected val
 var definition = AiFormDefinition.FromJsonSchema(schema);
 ```
 
-`FromJsonSchema` maps `type` and `format` onto controls — `email`, `date`, `date-time`, `uri`,
-`textarea`, `enum` to a picker, `boolean` to a checkbox, numbers with `minimum` and `maximum`.
+`FromJsonSchema` maps the schema onto controls and never throws on a malformed one, since the schema
+was written by a model:
+
+- `type`: `string`, `integer`, `number`, `boolean`, `object` (a grouped fieldset of its
+  `properties`), `array` (a list editor for scalar `items`, repeatable groups for object `items`).
+  A list such as `["string", "null"]` uses the first non-null entry and makes the field optional.
+- `format`: `email`, `uri`, `date`, `date-time`, `time`, `password`, and `textarea` as an extension
+  for a multi-line box.
+- `enum` with `enumNames` or `x-enumNames`, and `oneOf`/`anyOf` of `const` alternatives with
+  `title`s, become a picker. `anyOf` with a `{"type":"null"}` branch makes the field optional.
+- `const` and `readOnly` render the value without letting it be edited; `default` prefills.
+- `minimum`, `maximum`, `exclusiveMinimum`/`exclusiveMaximum` (numeric or the draft-4 flag),
+  `multipleOf`, `minLength`/`maxLength`, `minItems`/`maxItems`, `pattern`, and whole numbers only
+  for `integer`.
+- Local `$ref`s into `#/$defs/...` or `#/definitions/...` are followed; a `title` or `description`
+  beside the reference wins over the target's.
 
 ```razor
-<AiForm Definition="definition" OnSubmit="BookAsync" Submitted="@_submitted" />
+<AiForm Definition="definition" OnSubmit="BookAsync" OnSubmitJson="BookJsonAsync" Submitted="@_submitted" />
 ```
 
+`OnSubmit` receives the values as flat text keyed by path (`contact.email`, `tags[0]`,
+`people[1].name`); `OnSubmitJson` receives a `JsonElement` in the shape of the schema, with nested
+objects, arrays, and numbers and booleans encoded as such, which is usually what the tool call
+wants. `AiFormDefinition.ToJson(values)` performs the same conversion on demand.
+
 Validation happens in the application, not in the model, because a model asked to check its own
-output will sometimes say yes when the answer is no. Fields appear as the schema streams in, and
-anything already typed survives a new field arriving.
+output will sometimes say yes when the answer is no. Numbers are parsed in the invariant culture,
+because that is how a number input reports them whatever the page culture. Every control carries
+`aria-required`, `aria-invalid` and an `aria-describedby` pointing at its hint and error, and the
+error is a live `role="alert"`. Fields appear as the schema streams in, and anything already typed
+survives a new field arriving; a field whose definition changes shape, such as a different schema
+reusing the name with another type or prefill, is seeded afresh.

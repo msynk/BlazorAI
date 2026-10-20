@@ -41,9 +41,9 @@ else
         <span class="bai-source__body">
             <span class="bai-source__title">@Source.Title</span>
             <span class="bai-source__site">
-                @if (Source.IconUrl is { Length: > 0 } icon)
+                @if (SafeIconUrl(Source.IconUrl) is { } icon)
                 {
-                    <img class="bai-source__favicon" src="@icon" alt="" loading="lazy" />
+                    <img class="bai-source__favicon" src="@icon" alt="" loading="lazy" referrerpolicy="no-referrer" />
                 }
                 @(Source.SiteName ?? HostOf(Source.Url) ?? Source.Kind.ToString())
             </span>
@@ -64,6 +64,22 @@ else
             ? url!.Trim()
             : null;
 
+    /// <summary>
+    /// Returns an icon URL only when it is a web address or an inline image, the two forms a
+    /// favicon legitimately takes. An image src is less exposed than an href, but a data: URL of a
+    /// non-image type or a scheme the browser hands to a plugin is still not worth loading.
+    /// </summary>
+    internal static string? SafeIconUrl(string? url)
+    {
+        if (SafeUrl(url) is { } web) return web;
+
+        var trimmed = url?.Trim();
+        return trimmed is not null && trimmed.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase)
+            && !trimmed.Contains("svg", StringComparison.OrdinalIgnoreCase)
+            ? trimmed
+            : null;
+    }
+
     private static string? HostOf(string? url) =>
-        Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.Host : null;
+        SafeUrl(url) is { } safe && Uri.TryCreate(safe, UriKind.Absolute, out var uri) ? uri.Host : null;
 }

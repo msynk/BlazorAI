@@ -76,7 +76,7 @@ public sealed class Artifact : IArtifact
     public bool IsStreaming { get; private set; } = true;
 
     /// <inheritdoc />
-    public DateTimeOffset CreatedAt { get; }
+    public DateTimeOffset CreatedAt { get; private set; }
 
     /// <inheritdoc />
     public DateTimeOffset UpdatedAt { get; private set; }
@@ -143,7 +143,19 @@ public sealed class Artifact : IArtifact
     {
         // Completing a finished revision again, for example a created event that carried the content
         // followed by a completed event, must not record the same version twice.
-        if (!IsStreaming) return;
+        if (!IsStreaming)
+        {
+            // The second event may still carry the summary the first one lacked.
+            var versions = _versions;
+            if (summary is not null && versions is [.., { Summary: null } last] && last.Version == Version)
+            {
+                _versions = [.. versions.AsSpan(0, versions.Length - 1), last with { Summary = summary }];
+                Touch();
+            }
+
+            return;
+        }
+
         IsStreaming = false;
         _versions = [.. _versions, new ArtifactVersion(Version, Content, DateTimeOffset.UtcNow, summary)];
         Touch();
@@ -169,6 +181,32 @@ public sealed class Artifact : IArtifact
         }
 
         Touch();
+    }
+
+    /// <summary>Rebuilds the artifact from persisted state. Used by the conversation serializer.</summary>
+    internal void RestoreState(
+        string? content,
+        int version,
+        bool isStreaming,
+        DateTimeOffset createdAt,
+        DateTimeOffset updatedAt,
+        IEnumerable<ArtifactVersion> versions)
+    {
+        lock (_gate)
+        {
+            _content.Clear();
+            if (content is not null) _content.Append(content);
+            _length = _content.Length;
+            _cachedContent = content ?? string.Empty;
+        }
+
+        Version = version;
+        IsStreaming = isStreaming;
+        CreatedAt = createdAt;
+        _versions = [.. versions];
+        UpdatedAt = updatedAt;
+        Interlocked.Increment(ref _version);
+        Changed?.Invoke(this);
     }
 
     /// <summary>Restores the content of an earlier version as a new revision.</summary>

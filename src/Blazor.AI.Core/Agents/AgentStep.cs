@@ -109,6 +109,18 @@ public sealed class AgentStep
         Touch();
     }
 
+    /// <summary>Rebuilds the step from persisted state. Used by the conversation serializer.</summary>
+    internal void RestoreState(AgentStepStatus status, string? summary, AiError? error, DateTimeOffset? startedAt, DateTimeOffset? completedAt, IEnumerable<string> toolCallIds)
+    {
+        Status = status;
+        Summary = summary;
+        Error = error;
+        StartedAt = startedAt;
+        CompletedAt = completedAt;
+        Volatile.Write(ref _toolCallIds, [.. toolCallIds]);
+        Touch();
+    }
+
     private void Touch()
     {
         Interlocked.Increment(ref _version);

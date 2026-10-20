@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Net;
 using System.Text;
 
 namespace Blazor.AI.Markdown;
@@ -28,6 +30,11 @@ namespace Blazor.AI.Markdown;
 /// dropped rather than shown literally. Without that, every bold phrase in a response flashes a
 /// stray asterisk on its way in. Delimiters inside a closed span are literal either way.
 /// </para>
+/// <para>
+/// One deliberate departure from CommonMark: a run such as the second <c>**</c> in
+/// <c>**bold **text</c>, which whitespace keeps from closing, closes anyway when nothing else
+/// claims it. Models write that often enough that showing the asterisks would be the wrong call.
+/// </para>
 /// </remarks>
 public static class InlineParser
 {
@@ -40,15 +47,21 @@ public static class InlineParser
     /// <see langword="false"/> while more text is expected, which hides unmatched trailing delimiters.
     /// </param>
     /// <returns>The parsed inlines.</returns>
-    public static List<MarkdownInline> Parse(string? text, MarkdownOptions? options = null, bool isComplete = true)
+    public static List<MarkdownInline> Parse(string? text, MarkdownOptions? options = null, bool isComplete = true) =>
+        Parse(text, options ?? MarkdownOptions.Default, isComplete, null);
+
+    /// <summary>
+    /// Parses inline content against the definitions collected while parsing the surrounding
+    /// document, so reference links and footnotes resolve.
+    /// </summary>
+    internal static List<MarkdownInline> Parse(string? text, MarkdownOptions options, bool isComplete, ParseContext? context)
     {
         if (string.IsNullOrEmpty(text)) return [];
-        return new Scanner(text, options ?? MarkdownOptions.Default, isComplete).Run();
+        return new Scanner(text, options, isComplete, context).Run();
     }
 
-    // Emphasis and strikethrough nest. A span whose content is already this deep is kept as its
-    // source text, so no input can build a tree deep enough to overflow a renderer's stack.
-    private const int MaxDepth = 32;
+    // CommonMark's limit on the length of a link label.
+    private const int MaxLabelLength = 999;
 
     // CommonMark's limit on unclosed parentheses in a link destination. It also bounds how far a
     // destination that never closes is scanned, which keeps "[a](" repeated from being quadratic.
@@ -57,6 +70,28 @@ public static class InlineParser
     // Only ASCII punctuation can be escaped; before anything else a backslash is literal.
     private static bool IsAsciiPunctuation(char c) =>
         c is (>= '!' and <= '/') or (>= ':' and <= '@') or (>= '[' and <= '`') or (>= '{' and <= '~');
+
+    /// <summary>Whether the text between <c>&lt;</c> and <c>&gt;</c> is a tag, comment, or declaration.</summary>
+    internal static bool LooksLikeTag(ReadOnlySpan<char> inner)
+    {
+        if (inner.Length == 0) return false;
+
+        if (inner[0] == '!')
+        {
+            if (inner.Length < 2) return false;
+            if (inner[1] == '-') return inner.Length >= 5 && inner.StartsWith("!--") && inner.EndsWith("--");
+            return char.IsAsciiLetter(inner[1]) || inner[1] == '[';
+        }
+
+        if (inner[0] == '?') return inner.Length >= 2 && inner[^1] == '?';
+
+        var i = 0;
+        if (inner[i] == '/') i++;
+        if (i >= inner.Length || !char.IsAsciiLetter(inner[i])) return false;
+        while (i < inner.Length && (char.IsAsciiLetterOrDigit(inner[i]) || inner[i] == '-')) i++;
+
+        return i == inner.Length || inner[i] is ' ' or '\t' or '\n' or '/';
+    }
 
     private static int RunLength(string text, int start, char c)
     {
@@ -73,6 +108,13 @@ public static class InlineParser
 
         /// <summary>A finished inline.</summary>
         public MarkdownInline? Inline;
+
+        /// <summary>
+        /// The first node of a chain this node stands in for: the content of a pair that was too
+        /// deeply nested to wrap, which is emitted at this level with <see cref="Text"/> as the
+        /// literal markers on either side. The chain ends at a node whose <see cref="Next"/> is null.
+        /// </summary>
+        public Node? GroupFirst;
 
         /// <summary>The delimiter run this node holds, whose remaining characters are its text.</summary>
         public Delimiter? Delimiter;
@@ -145,10 +187,18 @@ public static class InlineParser
         public Bracket? Previous;
     }
 
-    private sealed class Scanner(string text, MarkdownOptions options, bool isComplete)
+    private sealed class Scanner(string text, MarkdownOptions options, bool isComplete, ParseContext? context)
     {
         private readonly StringBuilder _pending = new();
         private readonly StringBuilder _merged = new();
+
+        // Emphasis and strikethrough nest. A span whose content is already this deep is kept as
+        // its source text, so no input can build a tree deep enough to overflow a renderer's stack.
+        private readonly int _maxDepth = Math.Max(1, options.MaxNestingDepth);
+
+        // Where the last citation marker ended, so "[1][2]" reads as two markers even though the
+        // second follows a bracket.
+        private int _lastCitationEnd = -1;
 
         private Node? _head;
         private Node? _tail;
@@ -198,9 +248,15 @@ public static class InlineParser
                         }
 
                         // An unmatched run is literal as a whole; retrying from its second backtick
-                        // would pair a shorter run with a later one.
-                        _pending.Append('`', ticks);
+                        // would pair a shorter run with a later one. While streaming it is hidden
+                        // like a dangling asterisk: its partner has simply not arrived.
+                        if (isComplete) _pending.Append('`', ticks);
                         i += ticks;
+                        continue;
+
+                    case '&' when TryEntity(i, out var entityEnd, out var decoded):
+                        _pending.Append(decoded);
+                        i = entityEnd;
                         continue;
 
                     case '$' when options.Math && TryMath(i, out var mathEnd, out var expression):
@@ -213,9 +269,15 @@ public static class InlineParser
                         i += 2;
                         continue;
 
+                    case '[' when options.Footnotes && TryFootnoteReference(i, out var footnoteEnd, out var label):
+                        Add(new FootnoteReferenceInline(label));
+                        i = footnoteEnd;
+                        continue;
+
                     case '[' when options.CitationMarkers && TryCitationMarker(i, out var citeEnd, out var number):
                         Add(new CitationMarkerInline(number));
                         i = citeEnd;
+                        _lastCitationEnd = i;
                         continue;
 
                     case '[':
@@ -256,7 +318,7 @@ public static class InlineParser
                         continue;
 
                     case '\n':
-                        Add(new LineBreakInline(EndsWithHardBreak(i)));
+                        Add(new LineBreakInline(options.SoftBreaksAsHardBreaks || EndsWithHardBreak(i)));
                         i++;
                         while (i < text.Length && text[i] is ' ' or '\t') i++;
                         continue;
@@ -342,9 +404,31 @@ public static class InlineParser
         {
             var depth = 0;
 
-            for (var node = from; node is not null && node != to; node = node.Next)
+            // Collapsed chains are walked with an explicit stack, since thousands of them may nest.
+            Stack<(Node? Resume, Node? To, string? Markers)>? pending = null;
+            var node = from;
+
+            while (true)
             {
+                if (node is null || node == to)
+                {
+                    if (pending is null || pending.Count == 0) break;
+
+                    (node, to, var markers) = pending.Pop();
+                    _merged.Append(markers);
+                    continue;
+                }
+
                 depth = Math.Max(depth, node.Depth);
+
+                if (node.GroupFirst is { } first)
+                {
+                    _merged.Append(node.Text);
+                    (pending ??= new()).Push((node.Next, to, node.Text));
+                    node = first;
+                    to = null;
+                    continue;
+                }
 
                 if (node.Inline is { } inline)
                 {
@@ -354,13 +438,15 @@ public static class InlineParser
                 else if (node.Delimiter is { } delimiter)
                 {
                     // Only a delimiter outside every span can still be waiting for its partner.
-                    var hidden = topLevel && !isComplete && delimiter.HideWhileStreaming;
+                    var hidden = topLevel && pending is not { Count: > 0 } && !isComplete && delimiter.HideWhileStreaming;
                     if (!hidden) _merged.Append(delimiter.Char, delimiter.Count);
                 }
                 else
                 {
                     _merged.Append(node.Text);
                 }
+
+                node = node.Next;
             }
 
             FlushMerged(output);
@@ -474,7 +560,86 @@ public static class InlineParser
                 }
             }
 
+            PairLooseClosers(bottomIndex);
             RemoveDelimitersAbove(bottomIndex);
+        }
+
+        /// <summary>
+        /// Pairs what the CommonMark pass left behind in the way a reader would: a run that cannot
+        /// close only because whitespace precedes it closes the nearest unmatched opener of the
+        /// same kind and size, as in <c>**bold **text</c>.
+        /// </summary>
+        /// <remarks>
+        /// The whitespace moves out of the span, so the result is <c>&lt;strong&gt;bold&lt;/strong&gt; text</c>.
+        /// A run at the very end of streaming text is left alone, since it may still grow.
+        /// </remarks>
+        private void PairLooseClosers(int bottomIndex)
+        {
+            Delimiter? first = null;
+            for (var d = _delimiters; d is not null && d.Index > bottomIndex; d = d.Previous) first = d;
+
+            Delimiter? starOpener = null;
+            Delimiter? underscoreOpener = null;
+
+            for (var closer = first; closer is not null;)
+            {
+                var next = closer.Next;
+                if (closer.Char is not ('*' or '_'))
+                {
+                    closer = next;
+                    continue;
+                }
+
+                ref var opener = ref closer.Char == '*' ? ref starOpener : ref underscoreOpener;
+                var count = closer.Count;
+
+                if (opener is not null
+                    && closer.Start > 0
+                    && closer.CanOpen
+                    && !closer.CanClose
+                    && !closer.IsTrailing
+                    && count is 1 or 2
+                    && count == opener.Count
+                    && text[closer.Start - 1] is ' ' or '\t'
+                    && closer.Node.Previous != opener.Node)
+                {
+                    opener.Back += count;
+                    closer.Front += count;
+                    Wrap(opener, closer, count);
+                    MoveTrailingWhitespaceOut(opener.Node.Next!, closer.Node);
+
+                    while (closer.Previous is { } inside && inside != opener) RemoveDelimiter(inside);
+                    RemoveNode(opener.Node);
+                    RemoveDelimiter(opener);
+                    RemoveNode(closer.Node);
+                    RemoveDelimiter(closer);
+                    opener = null;
+                }
+                else if (closer.CanOpen && count is 1 or 2)
+                {
+                    opener = closer;
+                }
+
+                closer = next;
+            }
+        }
+
+        // The content of a loosely closed span ends with the whitespace that kept its closer from
+        // closing; that whitespace belongs after the span.
+        private void MoveTrailingWhitespaceOut(Node span, Node closerNode)
+        {
+            if (span.Inline is not EmphasisInline emphasis || emphasis.Inlines.Count == 0) return;
+            if (emphasis.Inlines[^1] is not TextInline last) return;
+
+            var trimmed = last.Text.TrimEnd();
+            if (trimmed.Length == last.Text.Length) return;
+
+            var whitespace = new Node { Text = last.Text[trimmed.Length..], Previous = span, Next = closerNode };
+            if (trimmed.Length == 0) emphasis.Inlines.RemoveAt(emphasis.Inlines.Count - 1);
+            else last.Text = trimmed;
+
+            span.Next = whitespace;
+            closerNode.Previous = whitespace;
         }
 
         // Closers that pair with the same openers share a kind, and with it a search bound.
@@ -499,16 +664,31 @@ public static class InlineParser
             return isComplete || !closer.IsTrailing || closer.Count >= Math.Min(opener.Count, 3);
         }
 
-        // Moves the nodes between a matched pair into a new span.
+        // Moves the nodes between a matched pair into a new span. Past the nesting limit the pair
+        // becomes literal text instead, and what it would have wrapped stays where it is.
         private void Wrap(Delimiter opener, Delimiter closer, int used)
         {
-            var span = closer.Char == '~' ? (MarkdownInline)new StrikethroughInline() : new EmphasisInline(used == 2);
-            var inlines = span is EmphasisInline emphasis ? emphasis.Inlines : ((StrikethroughInline)span).Inlines;
+            var depth = 0;
+            for (var inner = opener.Node.Next; inner is not null && inner != closer.Node; inner = inner.Next) depth = Math.Max(depth, inner.Depth);
 
-            var depth = Emit(opener.Node.Next, closer.Node, inlines, topLevel: false);
-            var node = depth < MaxDepth
-                ? new Node { Inline = span, Depth = depth + 1 }
-                : new Node { Text = text[(opener.Start + opener.Length - opener.Back)..(closer.Start + closer.Front)] };
+            Node node;
+            if (depth >= _maxDepth)
+            {
+                // The content is detached as a chain behind one node, in constant time, so a run
+                // of thousands of nested pairs costs each wrap no walk over everything inside.
+                var first = opener.Node.Next!;
+                var last = closer.Node.Previous!;
+                first.Previous = null;
+                last.Next = null;
+                node = new Node { GroupFirst = first, Text = new string(closer.Char, used), Depth = depth };
+            }
+            else
+            {
+                var span = closer.Char == '~' ? (MarkdownInline)new StrikethroughInline() : new EmphasisInline(used == 2);
+                var inlines = span is EmphasisInline emphasis ? emphasis.Inlines : ((StrikethroughInline)span).Inlines;
+                Emit(opener.Node.Next, closer.Node, inlines, topLevel: false);
+                node = new Node { Inline = span, Depth = depth + 1 };
+            }
 
             node.Previous = opener.Node;
             node.Next = closer.Node;
@@ -540,10 +720,20 @@ public static class InlineParser
             // An image's brackets stay live, since an image's text may hold a link.
             var active = opener is not null && (opener.IsImage || opener.LinksBefore == _links);
 
-            if (!active
-                || close + 1 >= text.Length
-                || text[close + 1] != '('
-                || !TryLinkTail(close + 1, out var end, out var url, out var title))
+            if (!active)
+            {
+                _pending.Append(']');
+                return close + 1;
+            }
+
+            int end;
+            string url;
+            string? title;
+            if (close + 1 < text.Length && text[close + 1] == '(' && TryLinkTail(close + 1, out end, out url, out title))
+            {
+                // An inline link.
+            }
+            else if (!TryReferenceLink(opener!, close, out end, out url, out title))
             {
                 _pending.Append(']');
                 return close + 1;
@@ -569,14 +759,61 @@ public static class InlineParser
             return end;
         }
 
+        /// <summary>
+        /// Resolves a reference link after its <c>]</c>: full (<c>[text][label]</c>), collapsed
+        /// (<c>[text][]</c>), or shortcut (<c>[text]</c>), against the document's definitions.
+        /// </summary>
+        private bool TryReferenceLink(Bracket opener, int close, out int end, out string url, out string? title)
+        {
+            end = close + 1;
+            url = string.Empty;
+            title = null;
+            if (context is null || !context.ResolvesReferences) return false;
+
+            var label = text.AsSpan(opener.LabelStart, close - opener.LabelStart);
+
+            if (close + 1 < text.Length && text[close + 1] == '[')
+            {
+                var window = text.AsSpan(close + 2, Math.Min(MaxLabelLength + 1, text.Length - close - 2));
+                var labelEnd = window.IndexOf(']');
+                if (labelEnd >= 0 && !window[..labelEnd].Contains('['))
+                {
+                    // A full reference uses its own label, and does not fall back to a shortcut.
+                    if (!window[..labelEnd].IsWhiteSpace()) label = window[..labelEnd];
+                    end = close + 2 + labelEnd + 1;
+                    return LookUp(label, ref url, ref title);
+                }
+            }
+
+            return LookUp(label, ref url, ref title);
+
+            bool LookUp(ReadOnlySpan<char> key, ref string destination, ref string? name)
+            {
+                if (key.Length > MaxLabelLength || !context.TryGetLink(key, out var definition)) return false;
+                destination = definition.Url;
+                name = definition.Title;
+                return true;
+            }
+        }
+
         // A bare or angle-bracket URL inside a link's text is text: an anchor inside an anchor is
         // invalid markup, and "[https://x.dev](https://x.dev)" means one link.
         private void UnwrapAutoLinks(Node? from)
         {
             if (_autoLinkSources is null) return;
 
-            for (var node = from; node is not null; node = node.Next)
+            Stack<Node?>? pending = null;
+            var node = from;
+
+            while (true)
             {
+                if (node is null)
+                {
+                    if (pending is null || pending.Count == 0) return;
+                    node = pending.Pop();
+                    continue;
+                }
+
                 if (node.Inline is LinkInline { IsAutoLink: true } auto)
                 {
                     node.Text = _autoLinkSources[auto];
@@ -586,6 +823,14 @@ public static class InlineParser
                 {
                     UnwrapAutoLinks(node.Inline);
                 }
+                else if (node.GroupFirst is { } first)
+                {
+                    (pending ??= new()).Push(node.Next);
+                    node = first;
+                    continue;
+                }
+
+                node = node.Next;
             }
         }
 
@@ -598,8 +843,11 @@ public static class InlineParser
                 _ => null,
             };
 
-            if (inlines is null) return;
+            if (inlines is not null) UnwrapAutoLinks(inlines);
+        }
 
+        private void UnwrapAutoLinks(List<MarkdownInline> inlines)
+        {
             for (var i = 0; i < inlines.Count; i++)
             {
                 if (inlines[i] is LinkInline { IsAutoLink: true } auto) inlines[i] = new TextInline(_autoLinkSources![auto]);
@@ -799,6 +1047,7 @@ public static class InlineParser
             end = start;
             expression = string.Empty;
             if (start + 1 >= text.Length || text[start + 1] is ' ' or '$' or '\n') return false;
+            if (IsPrice(start + 1)) return false;
 
             var closer = NextMathCloser(start + 2);
             if (closer >= text.Length || text[closer] != '$') return false;
@@ -825,6 +1074,15 @@ public static class InlineParser
             return i;
         }
 
+        // A dollar sign followed by a number and then a space or the end of the sentence is a
+        // price, not an opener, whatever follows it on the line.
+        private bool IsPrice(int i)
+        {
+            if (!char.IsAsciiDigit(text[i])) return false;
+            while (i < text.Length && (char.IsAsciiDigit(text[i]) || text[i] is ',' or '.')) i++;
+            return i >= text.Length || char.IsWhiteSpace(text[i]) || text[i] is ')' or ';' or ':' or '!' or '?';
+        }
+
         // A closer hugs its expression and is not followed by a digit, so that prices such as
         // "$5 and $10" stay text instead of becoming one expression.
         private bool IsMathCloser(int i) =>
@@ -841,13 +1099,88 @@ public static class InlineParser
             end = start;
             number = 0;
 
+            // "arr[0]" is an index, not a source. A bracket straight after another marker is fine,
+            // as in "[1][2]"; one straight after a word or a reference label is not.
+            if (start > 0)
+            {
+                var before = text[start - 1];
+                if (char.IsLetterOrDigit(before) || (before == ']' && _lastCitationEnd != start)) return false;
+            }
+
             var i = start + 1;
             var digits = 0;
             while (i < text.Length && char.IsAsciiDigit(text[i])) { i++; digits++; }
             if (digits == 0 || digits > 4 || i >= text.Length || text[i] != ']') return false;
             if (i + 1 < text.Length && text[i + 1] == '(') return false;
 
+            // A definition for the same label makes it a reference link instead.
+            if (context is not null && context.TryGetLink(text.AsSpan((start + 1)..i), out _)) return false;
+
             number = int.Parse(text.AsSpan((start + 1)..i));
+            end = i + 1;
+            return true;
+        }
+
+        // "[^label]" where the label has no whitespace and a definition exists; otherwise text.
+        private bool TryFootnoteReference(int start, out int end, out string label)
+        {
+            end = start;
+            label = string.Empty;
+            if (context is null || !context.ResolvesReferences) return false;
+            if (start + 2 >= text.Length || text[start + 1] != '^') return false;
+
+            var i = start + 2;
+            while (i < text.Length && i - start - 2 <= MaxLabelLength && text[i] is not (']' or '[' or ' ' or '\t' or '\n')) i++;
+            if (i == start + 2 || i >= text.Length || text[i] != ']') return false;
+
+            var candidate = text.AsSpan((start + 2)..i);
+            if (!context.HasFootnote(candidate)) return false;
+
+            label = candidate.ToString();
+            end = i + 1;
+            return true;
+        }
+
+        /// <summary>
+        /// Decodes an HTML entity (<c>&amp;amp;</c>), decimal (<c>&amp;#39;</c>), or hexadecimal
+        /// (<c>&amp;#x27;</c>) character reference. Anything that is not a valid reference stays
+        /// as written.
+        /// </summary>
+        private bool TryEntity(int start, out int end, out string decoded)
+        {
+            end = start;
+            decoded = string.Empty;
+
+            var i = start + 1;
+            if (i >= text.Length) return false;
+
+            if (text[i] == '#')
+            {
+                i++;
+                var hex = i < text.Length && text[i] is 'x' or 'X';
+                if (hex) i++;
+
+                var digitsStart = i;
+                var max = hex ? 6 : 7;
+                while (i < text.Length && i - digitsStart <= max && (hex ? char.IsAsciiHexDigit(text[i]) : char.IsAsciiDigit(text[i]))) i++;
+
+                var digits = i - digitsStart;
+                if (digits == 0 || digits > max || i >= text.Length || text[i] != ';') return false;
+
+                var value = int.Parse(text.AsSpan(digitsStart, digits), hex ? NumberStyles.AllowHexSpecifier : NumberStyles.None, CultureInfo.InvariantCulture);
+                decoded = value == 0 || value > 0x10FFFF || value is >= 0xD800 and <= 0xDFFF ? "\uFFFD" : char.ConvertFromUtf32(value);
+                end = i + 1;
+                return true;
+            }
+
+            var nameStart = i;
+            while (i < text.Length && i - nameStart < 32 && char.IsAsciiLetterOrDigit(text[i])) i++;
+            if (i - nameStart < 2 || i >= text.Length || text[i] != ';') return false;
+
+            var entity = text[start..(i + 1)];
+            decoded = WebUtility.HtmlDecode(entity);
+            if (decoded == entity) return false;
+
             end = i + 1;
             return true;
         }
@@ -887,11 +1220,15 @@ public static class InlineParser
             return true;
         }
 
+        // Only something shaped like a tag, comment, or declaration is HTML; "a < b > c" is text.
         private bool TryRawHtml(int start, out int end)
         {
+            end = start;
             var close = NextAngleClose(start + 1);
-            end = close < 0 ? start : close + 1;
-            return close >= 0;
+            if (close < 0 || !LooksLikeTag(text.AsSpan(start + 1, close - start - 1))) return false;
+
+            end = close + 1;
+            return true;
         }
 
         private bool TryBareUrl(int start, out int end, out string url)

@@ -105,6 +105,23 @@ public sealed class CitationMarkerInline(int number, string? citationId = null) 
     public string? CitationId { get; internal set; } = citationId;
 }
 
+/// <summary>A reference to a footnote, written <c>[^label]</c>.</summary>
+/// <param name="label">The label, without the caret.</param>
+public sealed class FootnoteReferenceInline(string label) : MarkdownInline
+{
+    /// <summary>The label, without the caret.</summary>
+    public string Label { get; } = label;
+
+    /// <summary>The footnote's number, assigned in the order footnotes are first cited.</summary>
+    public int Number { get; internal set; }
+
+    /// <summary>
+    /// Which of the footnote's references this is, from one, so a renderer can give each reference
+    /// its own anchor and the footnote a back-link to each.
+    /// </summary>
+    public int Ordinal { get; internal set; }
+}
+
 /// <summary>Raw inline HTML found in the source.</summary>
 /// <param name="html">The raw markup.</param>
 public sealed class RawHtmlInline(string html) : MarkdownInline

@@ -6,11 +6,17 @@
 
     Wrap a page or an application region to change tokens, density, or the string table for that
     region only. Nesting works: an inner provider overrides the outer one.
+
+    The root carries the bai-theme class as well as any explicit scheme, so the brand accent is
+    resolved on this element whichever way the scheme was chosen. An explicit scheme restates the
+    whole palette on this element, which is how a light region stays light inside a page the system
+    preference has made dark, and the other way round.
 *@
 
 <CascadingValue Value="_effective" IsFixed="false">
-    <div class="bai @DensityClass @Class"
+    <div class="bai bai-theme @DensityClass @Class"
          data-bai-theme="@(Theme is AiThemeMode.System ? null : Theme.ToString().ToLowerInvariant())"
+         dir="@DirAttribute"
          style="@Style"
          @attributes="Attributes">
         @ChildContent
@@ -27,6 +33,17 @@
     /// <summary>Which colour scheme to force.</summary>
     [Parameter]
     public AiThemeMode Theme { get; set; } = AiThemeMode.System;
+
+    /// <summary>
+    /// The writing direction of the region. Inherited from the page when unset, which is the usual
+    /// choice; set it to put a right-to-left chat inside a left-to-right page or the reverse.
+    /// </summary>
+    /// <remarks>
+    /// The stylesheet uses logical properties throughout, so switching direction flips padding,
+    /// borders, menu placement, the user bubble, and directional icons together.
+    /// </remarks>
+    [Parameter]
+    public AiTextDirection Direction { get; set; } = AiTextDirection.Inherit;
 
     /// <summary>Overrides the density independently of the rest of the settings.</summary>
     [Parameter]
@@ -53,6 +70,13 @@
 
     private string DensityClass => _effective.Density is AiDensity.Compact ? "bai-density-compact" : string.Empty;
 
+    private string? DirAttribute => Direction switch
+    {
+        AiTextDirection.LeftToRight => "ltr",
+        AiTextDirection.RightToLeft => "rtl",
+        _ => null,
+    };
+
     /// <inheritdoc />
     protected override void OnParametersSet()
     {
@@ -77,5 +101,18 @@
 
         /// <summary>Always dark.</summary>
         Dark = 2,
+    }
+
+    /// <summary>The writing direction of a themed region.</summary>
+    public enum AiTextDirection
+    {
+        /// <summary>Inherit the direction of the surrounding page.</summary>
+        Inherit = 0,
+
+        /// <summary>Left to right.</summary>
+        LeftToRight = 1,
+
+        /// <summary>Right to left.</summary>
+        RightToLeft = 2,
     }
 }

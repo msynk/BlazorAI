@@ -8,6 +8,7 @@ namespace Blazor.AI;
 /// artifact types the framework does not know about and register renderers for them. Comparison is
 /// ordinal and case-insensitive.
 /// </remarks>
+[System.Text.Json.Serialization.JsonConverter(typeof(Json.ArtifactKindJsonConverter))]
 public readonly record struct ArtifactKind
 {
     /// <summary>Prose, rendered as Markdown.</summary>

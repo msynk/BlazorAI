@@ -37,6 +37,7 @@ public sealed record AiError
     public string? Detail { get; init; }
 
     /// <summary>The originating exception, if any. Never serialized.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
     public Exception? Exception { get; init; }
 
     /// <summary>

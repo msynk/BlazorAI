@@ -348,6 +348,21 @@ public sealed class AiMessage : IAiMessage
         NotifyChanged();
     }
 
+    /// <summary>
+    /// Restores persisted state in one step without raising intermediate notifications. Used when
+    /// a conversation is rebuilt from a snapshot.
+    /// </summary>
+    internal void Restore(MessageStatus status, GenerationMetadata? metadata, AiError? error, FeedbackKind feedback, string? feedbackComment, AgentRun? run)
+    {
+        Status = status;
+        Metadata = metadata;
+        Error = error;
+        Feedback = feedback;
+        FeedbackComment = feedbackComment;
+        Run = run;
+        NotifyChanged();
+    }
+
     /// <summary>Records user sentiment about the message.</summary>
     /// <param name="feedback">The sentiment.</param>
     /// <param name="comment">Optional free-text detail.</param>

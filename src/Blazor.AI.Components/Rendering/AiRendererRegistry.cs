@@ -38,6 +38,37 @@ public sealed class AiRendererRegistry
     public CitationRenderer? CitationRenderer { get; set; }
 
     /// <summary>
+    /// Renders mathematics in Markdown, when set. Overrides the built-in monospace fallback.
+    /// </summary>
+    /// <remarks>
+    /// The fallback renders the expression source with the class <c>bai-math</c> and a
+    /// <c>data-math</c> attribute, so a host that prefers to typeset with KaTeX or MathJax in the
+    /// browser can do that from JavaScript instead of setting this.
+    /// </remarks>
+    public MathRenderer? MathRenderer { get; set; }
+
+    private readonly ConcurrentDictionary<string, CodeBlockRenderer> _codeLanguages = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Registers a renderer for fenced code blocks of one language, such as <c>mermaid</c> or
+    /// <c>vega</c>, in place of the highlighted code view.
+    /// </summary>
+    /// <param name="language">The language as written in the fence info string. Case does not matter.</param>
+    /// <param name="renderer">Produces the markup.</param>
+    public void RegisterCodeLanguage(string language, CodeBlockRenderer renderer)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(language);
+        ArgumentNullException.ThrowIfNull(renderer);
+        _codeLanguages[language.Trim()] = renderer;
+    }
+
+    /// <summary>Finds a code block renderer.</summary>
+    /// <param name="language">The language from the fence info string.</param>
+    /// <returns>The renderer, or <see langword="null"/> to use the built-in code view.</returns>
+    public CodeBlockRenderer? FindCodeLanguage(string? language) =>
+        string.IsNullOrWhiteSpace(language) ? null : _codeLanguages.GetValueOrDefault(language.Trim());
+
+    /// <summary>
     /// Registers a renderer for a message part kind.
     /// </summary>
     /// <param name="kind">The <see cref="IMessagePart.Kind"/> to handle.</param>

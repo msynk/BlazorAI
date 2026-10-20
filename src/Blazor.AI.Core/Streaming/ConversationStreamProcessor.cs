@@ -23,6 +23,10 @@ public sealed class ConversationStreamProcessor
     // is added to.
     private readonly Dictionary<AiMessage, TokenUsage> _messageUsageBefore = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<AgentRun, TokenUsage> _runUsageBefore = new(ReferenceEqualityComparer.Instance);
+
+    // The current stream's latest usage snapshot, merged field by field: a provider that reports
+    // input tokens at the start and output tokens at the end must not have the first report erased.
+    private TokenUsage _streamUsage;
     private DateTimeOffset? _startedAt;
     private DateTimeOffset? _firstTokenAt;
 
@@ -85,6 +89,7 @@ public sealed class ConversationStreamProcessor
     {
         _messageUsageBefore.Clear();
         _runUsageBefore.Clear();
+        _streamUsage = default;
     }
 
     /// <summary>
@@ -402,8 +407,9 @@ public sealed class ConversationStreamProcessor
     /// <returns>The message's usage including the stream's latest report.</returns>
     private TokenUsage RecordUsage(AiMessage message, TokenUsage streamUsage)
     {
-        if (CurrentRun is { } run) run.SetUsage(Before(_runUsageBefore, run, run.Usage) + streamUsage);
-        return Before(_messageUsageBefore, message, message.Metadata?.Usage ?? default) + streamUsage;
+        _streamUsage = TokenUsage.Merge(_streamUsage, streamUsage);
+        if (CurrentRun is { } run) run.SetUsage(Before(_runUsageBefore, run, run.Usage) + _streamUsage);
+        return Before(_messageUsageBefore, message, message.Metadata?.Usage ?? default) + _streamUsage;
 
         static TokenUsage Before<T>(Dictionary<T, TokenUsage> before, T key, TokenUsage current) where T : notnull
         {

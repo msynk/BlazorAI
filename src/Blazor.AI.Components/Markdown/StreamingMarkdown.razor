@@ -1,6 +1,5 @@
 @namespace Blazor.AI.Components
 @inherits AiComponentBase
-@implements IDisposable
 
 @*
     Renders Markdown that is still being written.
@@ -8,6 +7,9 @@
     Holds one incremental parser for the lifetime of the component, so text already seen is parsed
     once no matter how many deltas arrive. That is the difference between a long streamed answer
     costing linear work and quadratic work.
+
+    The parser is built from the cascaded Markdown options, and rebuilt if a different options
+    instance is cascaded, so the parser and the renderer always agree on what is enabled.
 *@
 
 <MarkdownView Document="_document"
@@ -17,7 +19,8 @@
               Class="@Class" />
 
 @code {
-    private readonly IncrementalMarkdownParser _parser = new();
+    private IncrementalMarkdownParser? _parser;
+    private MarkdownOptions? _parserOptions;
     private MarkdownDocument? _document;
     private string? _lastText;
     private bool _lastStreaming = true;
@@ -45,6 +48,14 @@
     /// <inheritdoc />
     protected override void OnParametersSet()
     {
+        var markdownOptions = Options.Markdown;
+        if (_parser is null || !ReferenceEquals(_parserOptions, markdownOptions))
+        {
+            _parser = new IncrementalMarkdownParser(markdownOptions);
+            _parserOptions = markdownOptions;
+            _lastText = null;
+        }
+
         if (_lastText == Text && _lastStreaming == IsStreaming) return;
 
         _lastText = Text;
@@ -53,5 +64,15 @@
     }
 
     /// <inheritdoc />
-    public void Dispose() => _parser.Reset();
+    /// <remarks>
+    /// The base class is disposed asynchronously, and Blazor calls only that on a component which
+    /// implements both interfaces, so the cleanup lives here rather than in <c>Dispose</c>.
+    /// </remarks>
+    protected override ValueTask DisposeCoreAsync()
+    {
+        _parser?.Reset();
+        _parser = null;
+        _document = null;
+        return ValueTask.CompletedTask;
+    }
 }

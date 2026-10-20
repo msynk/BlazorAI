@@ -101,7 +101,7 @@
 
         @if (!Message.IsBusy)
         {
-            <MessageActions Message="Message" Session="Session" />
+            <MessageActions Message="Message" Session="Session" CanRegenerate="@IsLatest" OnFeedback="OnFeedbackRecorded" />
         }
     }
 </article>
@@ -139,6 +139,17 @@
     [Parameter]
     public EventCallback<CitationSource> OnSourceClick { get; set; }
 
+    /// <summary>
+    /// Whether this is the newest message in the transcript. Regeneration is offered only for the
+    /// newest reply, because regenerating an older one discards everything after it.
+    /// </summary>
+    [Parameter]
+    public bool IsLatest { get; set; } = true;
+
+    /// <summary>Raised when the user records feedback on this message, so a host can persist it.</summary>
+    [Parameter]
+    public EventCallback<MessageFeedback> OnFeedback { get; set; }
+
     /// <inheritdoc />
     protected override void OnParametersSet()
     {
@@ -149,6 +160,9 @@
     }
 
     private void OnMessageChanged(AiMessage message) => RequestRender();
+
+    private Task OnFeedbackRecorded(FeedbackKind feedback) =>
+        OnFeedback.HasDelegate ? OnFeedback.InvokeAsync(new MessageFeedback(Message, feedback)) : Task.CompletedTask;
 
     private void StartEdit()
     {

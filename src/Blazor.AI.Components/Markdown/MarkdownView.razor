@@ -1,5 +1,6 @@
 @namespace Blazor.AI.Components
 @inherits AiComponentBase
+@inject AiRendererRegistry Renderers
 
 @*
     Renders a parsed Markdown document.
@@ -7,6 +8,9 @@
     Takes an already-parsed document rather than a string so the caller decides how parsing happens:
     StreamingMarkdown reuses an incremental parser across deltas, while a static caller parses once.
     Raw HTML is escaped unless the host explicitly opts in, because model output is untrusted.
+
+    Two kinds of block defer to the renderer registry: fenced code in a language the host registered
+    (a diagram, a chart) and mathematics. Everything else is rendered here.
 *@
 
 @if (Document is { } document)
@@ -16,10 +20,34 @@
         {
             @RenderBlock(block)
         }
+        @if (document.Footnotes.Count > 0)
+        {
+            <section class="bai-footnotes" role="doc-endnotes">
+                <ol>
+                    @foreach (var footnote in document.Footnotes)
+                    {
+                        <li id="@FootnoteId(footnote.Number)">
+                            @foreach (var child in footnote.Blocks)
+                            {
+                                @RenderBlock(child)
+                            }
+                            @for (var i = 1; i <= footnote.ReferenceCount; i++)
+                            {
+                                <a class="bai-footnote-backref" href="#@FootnoteReferenceId(footnote.Number, i)" role="doc-backlink" aria-label="Back to reference @footnote.Number">&#8617;</a>
+                            }
+                        </li>
+                    }
+                </ol>
+            </section>
+        }
     </div>
 }
 
 @code {
+    // Keeps footnote anchors apart when several messages in one transcript each have a footnote 1.
+    private readonly string _anchor = Guid.NewGuid().ToString("N")[..6];
+    private readonly HashSet<string> _loadedImages = new(StringComparer.Ordinal);
+
     /// <summary>The document to render.</summary>
     [Parameter]
     public MarkdownDocument? Document { get; set; }
@@ -59,7 +87,14 @@
                 break;
 
             case CodeBlock fenced:
-                <CodeBlockView Code="@fenced.Code" Language="@fenced.Language" IsStreaming="@fenced.IsOpen" />
+                @if (Renderers.FindCodeLanguage(fenced.Language) is { } codeRenderer)
+                {
+                    @codeRenderer(new CodeBlockContext(fenced.Code, fenced.Language, fenced.Meta, fenced.IsOpen))
+                }
+                else
+                {
+                    <CodeBlockView Code="@fenced.Code" Language="@fenced.Language" IsStreaming="@fenced.IsOpen" />
+                }
                 break;
 
             case ListBlock list:
@@ -84,7 +119,14 @@
                 break;
 
             case MathBlock math:
-                <span class="bai-math bai-math--block">@math.Expression</span>
+                @if (Renderers.MathRenderer is { } mathRenderer)
+                {
+                    @mathRenderer(new MathContext(math.Expression, IsBlock: true))
+                }
+                else
+                {
+                    <span class="bai-math bai-math--block" data-math="@math.Expression">@math.Expression</span>
+                }
                 break;
 
             case HtmlBlock html:
@@ -94,7 +136,7 @@
                 }
                 else
                 {
-                    <pre class="bai-code"><code>@html.Html</code></pre>
+                    <p>@html.Html</p>
                 }
                 break;
         }
@@ -216,11 +258,11 @@
                 break;
 
             case LinkInline link:
-                <a href="@Sanitize(link.Url)" target="_blank" rel="noopener noreferrer nofollow">@RenderInlines(link.Inlines)</a>
+                <a href="@Sanitize(link.Url)" title="@link.Title" target="_blank" rel="noopener noreferrer nofollow">@RenderInlines(link.Inlines)</a>
                 break;
 
             case ImageInline image:
-                <img src="@SanitizeImage(image.Url)" alt="@image.Alt" title="@image.Title" loading="lazy" />
+                @RenderImage(image)
                 break;
 
             case LineBreakInline { IsHard: true }:
@@ -232,7 +274,18 @@
                 break;
 
             case MathInline math:
-                <span class="bai-math">@math.Expression</span>
+                @if (Renderers.MathRenderer is { } mathRenderer)
+                {
+                    @mathRenderer(new MathContext(math.Expression, IsBlock: false))
+                }
+                else
+                {
+                    <span class="bai-math" data-math="@math.Expression">@math.Expression</span>
+                }
+                break;
+
+            case FootnoteReferenceInline footnote:
+                <sup class="bai-footnote-ref" id="@FootnoteReferenceId(footnote.Number, footnote.Ordinal)"><a href="#@FootnoteId(footnote.Number)" role="doc-noteref">@footnote.Number</a></sup>
                 break;
 
             case CitationMarkerInline marker:
@@ -248,6 +301,40 @@
                 break;
         }
     };
+
+    private RenderFragment RenderImage(ImageInline image) => __builder =>
+    {
+        var source = SanitizeImage(image.Url);
+        var decision = source == BlankImage ? AiImageDecision.Show : Options.Images.Decide(source);
+        if (decision == AiImageDecision.AskFirst && _loadedImages.Contains(source)) decision = AiImageDecision.Show;
+
+        switch (decision)
+        {
+            case AiImageDecision.Show:
+                <img src="@source" alt="@image.Alt" title="@image.Title" loading="lazy" />
+                break;
+
+            case AiImageDecision.AskFirst:
+                <button type="button" class="bai-image-placeholder" title="@source" @onclick="() => _loadedImages.Add(source)">
+                    @(string.IsNullOrWhiteSpace(image.Alt) ? HostOf(source) : image.Alt)
+                </button>
+                break;
+
+            default:
+                @if (!string.IsNullOrWhiteSpace(image.Alt))
+                {
+                    <span class="bai-image-blocked">@image.Alt</span>
+                }
+                break;
+        }
+    };
+
+    private static string HostOf(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Host.Length > 0 ? uri.Host : url;
+
+    private string FootnoteId(int number) => $"bai-fn-{_anchor}-{number}";
+
+    private string FootnoteReferenceId(int number, int ordinal) => $"bai-fnref-{_anchor}-{number}-{ordinal}";
 
     private RenderFragment RenderCitation(CitationMarkerInline marker) => __builder =>
     {

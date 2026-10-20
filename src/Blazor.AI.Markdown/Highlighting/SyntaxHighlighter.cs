@@ -80,6 +80,19 @@ public static class SyntaxHighlighter
                 continue;
             }
 
+            if (language.VariablePrefix == c && TryVariable(code, i, out var variableEnd))
+            {
+                tokens.Add(new CodeToken(TokenKind.Variable, i, variableEnd - i));
+                i = variableEnd;
+                continue;
+            }
+
+            if (language.HyphenatedCommands && c == '-' && TryParameter(code, i, language, comparison, tokens, out var parameterEnd))
+            {
+                i = parameterEnd;
+                continue;
+            }
+
             if (language.StringDelimiters.Contains(c))
             {
                 var end = ScanString(code, i, language);
@@ -107,6 +120,22 @@ public static class SyntaxHighlighter
             {
                 var end = i;
                 while (end < code.Length && IsWordChar(code[end])) end++;
+
+                // Verb-Noun is a command whatever the words are, so Get-ChildItem is a function
+                // even though neither half is followed by a parenthesis.
+                if (language.HyphenatedCommands && end + 1 < code.Length && code[end] == '-' && char.IsLetter(code[end + 1]))
+                {
+                    while (end + 1 < code.Length && code[end] == '-' && char.IsLetter(code[end + 1]))
+                    {
+                        end++;
+                        while (end < code.Length && IsWordChar(code[end])) end++;
+                    }
+
+                    tokens.Add(new CodeToken(TokenKind.Function, i, end - i));
+                    i = end;
+                    continue;
+                }
+
                 var word = code[i..end];
                 tokens.Add(new CodeToken(Classify(word, code, end, language, comparison), i, end - i));
                 i = end;
@@ -199,6 +228,47 @@ public static class SyntaxHighlighter
             else break;
         }
 
+        return true;
+    }
+
+    // A sigil and a name, as in $name, $env:Path, $_, or ${a name}. A sigil on its own is an operator.
+    private static bool TryVariable(string code, int start, out int end)
+    {
+        end = start + 1;
+        if (end >= code.Length) return false;
+
+        if (code[end] == '{')
+        {
+            var close = code.IndexOf('}', end);
+            if (close < 0) return false;
+            end = close + 1;
+            return true;
+        }
+
+        if (code[end] is '_' or '$' or '?' or '^')
+        {
+            end++;
+            while (end < code.Length && IsWordChar(code[end])) end++;
+            return true;
+        }
+
+        if (!char.IsLetter(code[end])) return false;
+        while (end < code.Length && (IsWordChar(code[end]) || (code[end] == ':' && end + 1 < code.Length && IsWordStart(code[end + 1])))) end++;
+        return true;
+    }
+
+    // A hyphen and a word, after whitespace or at the start: a keyword such as -eq when the
+    // language lists it, otherwise a parameter such as -Recurse.
+    private static bool TryParameter(string code, int start, LanguageDefinition language, StringComparison comparison, List<CodeToken> tokens, out int end)
+    {
+        end = start + 1;
+        if (end >= code.Length || !char.IsLetter(code[end])) return false;
+        if (start > 0 && !char.IsWhiteSpace(code[start - 1]) && code[start - 1] is not ('(' or '{' or ',' or ';' or '|')) return false;
+
+        while (end < code.Length && IsWordChar(code[end])) end++;
+        var word = code[start..end];
+        var kind = Contains(language.Keywords, word, comparison) ? TokenKind.Keyword : TokenKind.Attribute;
+        tokens.Add(new CodeToken(kind, start, end - start));
         return true;
     }
 
@@ -304,7 +374,7 @@ public static class SyntaxHighlighter
             var triple = new string(quote, 3);
             for (var j = start + 3; j < code.Length; j++)
             {
-                if (language.StringEscapes && code[j] == '\\') { j++; continue; }
+                if (language.StringEscapes && code[j] == language.StringEscapeCharacter) { j++; continue; }
                 if (MatchesAt(code, j, triple)) return j + 3;
             }
 
@@ -317,7 +387,7 @@ public static class SyntaxHighlighter
         {
             var c = code[i];
 
-            if (language.StringEscapes && c == '\\' && i + 1 < code.Length)
+            if (language.StringEscapes && c == language.StringEscapeCharacter && i + 1 < code.Length)
             {
                 i += 2;
                 continue;

@@ -157,9 +157,10 @@ public sealed class InlineParsingTests
     }
 
     [Fact]
-    public void AnUnclosedCodeSpanStaysLiteral()
+    public void AnUnclosedCodeSpanIsHiddenWhileStreamingAndLiteralWhenDone()
     {
-        Assert.Equal("`half", Flatten(Parse("`half", complete: false)));
+        Assert.Equal("half", Flatten(Parse("`half", complete: false)));
+        Assert.Equal("`half", Flatten(Parse("`half")));
     }
 
     [Fact]

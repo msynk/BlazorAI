@@ -89,6 +89,14 @@
     [Parameter]
     public EventCallback<Citation> OnCitationClick { get; set; }
 
+    /// <summary>Raised when the user activates a source card.</summary>
+    [Parameter]
+    public EventCallback<CitationSource> OnSourceClick { get; set; }
+
+    /// <summary>Raised when the user records feedback on a reply, so a host can persist it.</summary>
+    [Parameter]
+    public EventCallback<MessageFeedback> OnFeedback { get; set; }
+
     /// <summary>Raised when the user scrolls away from, or back to, the newest message.</summary>
     [Parameter]
     public EventCallback<bool> PinnedChanged { get; set; }
@@ -224,10 +232,15 @@
                          Conversation="Conversation"
                          Session="Session"
                          Animate="@(!_prerendering && _initialised)"
+                         IsLatest="@IsLatestMessage(message)"
                          OnCitationClick="OnCitationClick"
+                         OnSourceClick="OnSourceClick"
+                         OnFeedback="OnFeedback"
                          @key="message.MessageId" />
         }
     };
+
+    private bool IsLatestMessage(AiMessage message) => _messages.Count > 0 && ReferenceEquals(message, _messages[^1]);
 
     private RenderFragment RenderMessage(AiMessage message, bool animate) => __builder =>
     {
@@ -241,7 +254,10 @@
                      Conversation="Conversation"
                      Session="Session"
                      Animate="@(animate && _initialised)"
+                     IsLatest="@IsLatestMessage(message)"
                      OnCitationClick="OnCitationClick"
+                     OnSourceClick="OnSourceClick"
+                     OnFeedback="OnFeedback"
                      @key="message.MessageId" />
     };
 

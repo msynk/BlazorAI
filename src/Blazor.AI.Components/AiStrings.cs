@@ -15,6 +15,90 @@ public class AiStrings
     /// <summary>The default English strings.</summary>
     public static AiStrings Default { get; } = new();
 
+    /// <summary>Validation message for an integer field that holds a fraction.</summary>
+    /// <param name="label">The field label.</param>
+    /// <returns>The message.</returns>
+    public virtual string FieldNotAnInteger(string label) => $"{label} must be a whole number.";
+
+    /// <summary>Validation message for a number that is not a multiple of the field step.</summary>
+    /// <param name="label">The field label.</param>
+    /// <param name="step">The step the value must be a multiple of.</param>
+    /// <returns>The message.</returns>
+    public virtual string FieldNotAMultipleOf(string label, double step) => $"{label} must be a multiple of {step}.";
+
+    /// <summary>Validation message for a number at or below an exclusive minimum.</summary>
+    /// <param name="label">The field label.</param>
+    /// <param name="minimum">The value the field must exceed.</param>
+    /// <returns>The message.</returns>
+    public virtual string FieldNotAboveMinimum(string label, double minimum) => $"{label} must be greater than {minimum}.";
+
+    /// <summary>Validation message for a number at or above an exclusive maximum.</summary>
+    /// <param name="label">The field label.</param>
+    /// <param name="maximum">The value the field must stay below.</param>
+    /// <returns>The message.</returns>
+    public virtual string FieldNotBelowMaximum(string label, double maximum) => $"{label} must be less than {maximum}.";
+
+    /// <summary>Validation message for text shorter than the field allows.</summary>
+    /// <param name="label">The field label.</param>
+    /// <param name="minimum">The fewest accepted characters.</param>
+    /// <returns>The message.</returns>
+    public virtual string FieldTooShort(string label, int minimum) => $"{label} must be at least {minimum} characters.";
+
+    /// <summary>Validation message for text longer than the field allows.</summary>
+    /// <param name="label">The field label.</param>
+    /// <param name="maximum">The most accepted characters.</param>
+    /// <returns>The message.</returns>
+    public virtual string FieldTooLong(string label, int maximum) => $"{label} must be at most {maximum} characters.";
+
+    /// <summary>Validation message for a list with fewer entries than the field allows.</summary>
+    /// <param name="label">The field label.</param>
+    /// <param name="minimum">The fewest accepted entries.</param>
+    /// <returns>The message.</returns>
+    public virtual string FieldTooFewItems(string label, int minimum) => $"{label} needs at least {minimum} items.";
+
+    /// <summary>Validation message for a list with more entries than the field allows.</summary>
+    /// <param name="label">The field label.</param>
+    /// <param name="maximum">The most accepted entries.</param>
+    /// <returns>The message.</returns>
+    public virtual string FieldTooManyItems(string label, int maximum) => $"{label} can have at most {maximum} items.";
+
+    /// <summary>Validation message for a URL field that does not hold a web address.</summary>
+    /// <param name="label">The field label.</param>
+    /// <returns>The message.</returns>
+    public virtual string FieldNotAUrl(string label) => $"{label} must be a web address.";
+
+    /// <summary>Validation message for a date or time field that does not hold one.</summary>
+    /// <param name="label">The field label.</param>
+    /// <returns>The message.</returns>
+    public virtual string FieldNotADate(string label) => $"{label} must be a valid date or time.";
+
+    /// <summary>Label for adding an entry to a list field.</summary>
+    public virtual string AddItem => "Add item";
+
+    /// <summary>Accessible label for removing one entry of a list field.</summary>
+    /// <param name="label">The field label.</param>
+    /// <param name="index">The one-based position of the entry.</param>
+    /// <returns>The label.</returns>
+    public virtual string RemoveItem(string label, int index) => $"Remove {label} {index}";
+
+    /// <summary>Placeholder of the free-text answer box under a waiting agent run.</summary>
+    public virtual string AnswerPlaceholder => "Type your answer...";
+
+    /// <summary>Label of the button that sends a free-text answer to a waiting agent run.</summary>
+    public virtual string Answer => "Answer";
+
+    /// <summary>Accessible name of the list of tool calls one agent step made.</summary>
+    public virtual string ToolCalls => "Tool calls";
+
+    /// <summary>Accessible label for the elapsed time of a running agent.</summary>
+    public virtual string Elapsed => "Elapsed";
+
+    /// <summary>Shown when the context window is filling up.</summary>
+    public virtual string ContextWarning => "The context window is filling up";
+
+    /// <summary>Shown when the context window is nearly full.</summary>
+    public virtual string ContextCritical => "The context window is almost full";
+
     /// <summary>Placeholder in the prompt composer.</summary>
     public virtual string PromptPlaceholder => "Send a message...";
 
@@ -376,4 +460,48 @@ public class AiStrings
         < 1_000_000 => $"{tokens / 1000.0:F1}k",
         _ => $"{tokens / 1_000_000.0:F1}M",
     };
+
+    /// <summary>The character counter under the composer when a length limit is set.</summary>
+    /// <param name="used">Characters typed so far.</param>
+    /// <param name="max">The limit.</param>
+    /// <returns>The counter text.</returns>
+    public virtual string CharacterCount(int used, int max) => $"{used:N0} / {max:N0}";
+
+    /// <summary>Announced when the composer text is close to its length limit.</summary>
+    /// <param name="remaining">Characters left before the limit.</param>
+    /// <returns>The announcement.</returns>
+    public virtual string CharactersRemaining(int remaining) =>
+        remaining == 1 ? "1 character remaining" : $"{remaining:N0} characters remaining";
+
+    /// <summary>Shown when more files are staged than the composer allows.</summary>
+    /// <param name="fileName">The file that was turned away.</param>
+    /// <param name="maxCount">The most files the composer accepts at once.</param>
+    /// <returns>The message.</returns>
+    public virtual string AttachmentTooMany(string fileName, int maxCount) =>
+        $"{fileName} was not attached. Up to {maxCount} files can be attached at once.";
+
+    /// <summary>Accessible name of the slash-command menu.</summary>
+    public virtual string Commands => "Commands";
+
+    /// <summary>Accessible name of the mention menu.</summary>
+    public virtual string Mentions => "Mentions";
+
+    /// <summary>Announced while dictation is running.</summary>
+    public virtual string Listening => "Listening";
+
+    /// <summary>Announced when dictation stops.</summary>
+    public virtual string DictationStopped => "Dictation stopped";
+
+    /// <summary>Announced when dictation fails.</summary>
+    /// <param name="error">The error name the browser reported, such as <c>not-allowed</c>.</param>
+    /// <returns>The announcement.</returns>
+    public virtual string DictationFailed(string error) => $"Dictation failed: {error}";
+
+    /// <summary>Label of a deprecated model in the picker.</summary>
+    /// <param name="name">The model name.</param>
+    /// <returns>The label.</returns>
+    public virtual string ModelDeprecated(string name) => $"{name} (deprecated)";
+
+    /// <summary>Group heading in the model picker for models with neither a family nor a provider.</summary>
+    public virtual string OtherModels => "Other";
 }

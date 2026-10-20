@@ -117,7 +117,7 @@ public static class BuiltInLanguages
     /// <summary>Shell scripts.</summary>
     public static LanguageDefinition Shell { get; } = new("bash")
     {
-        Aliases = ["sh", "shell", "zsh", "console", "powershell", "ps1", "pwsh"],
+        Aliases = ["sh", "shell", "zsh", "console"],
         Keywords = Set(
             "if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done", "case",
             "esac", "function", "return", "export", "local", "source", "alias", "set", "unset",
@@ -126,6 +126,40 @@ public static class BuiltInLanguages
         LineComments = ["#"],
         BlockComments = [],
         StringDelimiters = ['"', '\''],
+    };
+
+    /// <summary>PowerShell.</summary>
+    /// <remarks>
+    /// Its own grammar rather than an alias of the shell: cmdlets are <c>Verb-Noun</c>, parameters
+    /// and comparison operators start with a hyphen, variables with a dollar sign, strings escape
+    /// with a backtick, and <c>&lt;# #&gt;</c> is a block comment.
+    /// </remarks>
+    public static LanguageDefinition PowerShell { get; } = new("powershell")
+    {
+        Aliases = ["ps1", "pwsh", "ps", "posh"],
+        Keywords = Set(
+            "begin", "break", "catch", "class", "continue", "data", "define", "do", "dynamicparam",
+            "else", "elseif", "end", "enum", "exit", "filter", "finally", "for", "foreach", "from",
+            "function", "hidden", "if", "in", "inlinescript", "param", "process", "return", "static",
+            "switch", "throw", "trap", "try", "until", "using", "var", "while", "workflow",
+            "-eq", "-ne", "-gt", "-ge", "-lt", "-le", "-like", "-notlike", "-match", "-notmatch",
+            "-contains", "-notcontains", "-in", "-notin", "-replace", "-split", "-join", "-and",
+            "-or", "-not", "-xor", "-is", "-isnot", "-as", "-band", "-bor", "-bxor", "-bnot",
+            "-shl", "-shr", "-f", "-ceq", "-ieq", "-cne", "-ine", "-clike", "-ilike", "-cmatch", "-imatch"),
+        Types = Set(
+            "string", "int", "long", "bool", "double", "decimal", "char", "byte", "array", "hashtable",
+            "pscustomobject", "psobject", "datetime", "timespan", "guid", "switch", "object", "void",
+            "scriptblock", "regex", "xml", "uri", "version", "ordered"),
+        Constants = Set("true", "false", "null"),
+        LineComments = ["#"],
+        BlockComments = [("<#", "#>")],
+        StringDelimiters = ['"', '\''],
+        StringEscapeCharacter = '`',
+        MultiLineStrings = true,
+        IgnoreCase = true,
+        AnnotationPrefix = '[',
+        VariablePrefix = '$',
+        HyphenatedCommands = true,
     };
 
     /// <summary>Go.</summary>
@@ -210,6 +244,6 @@ public static class BuiltInLanguages
     /// <summary>Every built-in language.</summary>
     public static IReadOnlyList<LanguageDefinition> All { get; } =
     [
-        CSharp, JavaScript, Python, Json, Html, Css, Sql, Shell, Go, Rust, Java, Yaml, Toml, Diff,
+        CSharp, JavaScript, Python, Json, Html, Css, Sql, Shell, PowerShell, Go, Rust, Java, Yaml, Toml, Diff,
     ];
 }

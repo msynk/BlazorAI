@@ -53,8 +53,22 @@ public sealed record ComposerFile(string Name, string ContentType, long Size, st
     /// The content as a browser stream, or <see langword="null"/> when it was sent inline in
     /// <see cref="Data"/> or withheld because the file was over the size limit.
     /// </summary>
-    /// <remarks>Read it with <see cref="ToAttachmentAsync"/>, which also releases it.</remarks>
+    /// <remarks>
+    /// Read it with <see cref="ToAttachmentAsync"/>, which releases it once the content has been
+    /// buffered, or keeps it open behind <see cref="Attachment.ContentFactory"/> for a file too large
+    /// to buffer.
+    /// </remarks>
     public IJSStreamReference? Content { get; init; }
+
+    /// <summary>
+    /// A short browser-side URL for an image preview, created with <c>URL.createObjectURL</c>, or
+    /// <see langword="null"/> for files that are not images.
+    /// </summary>
+    /// <remarks>
+    /// Becomes <see cref="Attachment.ThumbnailUrl"/>. The bytes stay in the browser; only the URL
+    /// crosses the circuit. The composer revokes it when the attachment is removed.
+    /// </remarks>
+    public string? PreviewUrl { get; init; }
 
     /// <summary>
     /// Converts a file sent inline into an attachment with the content as a data URL.
@@ -80,20 +94,40 @@ public sealed record ComposerFile(string Name, string ContentType, long Size, st
     }
 
     /// <summary>
-    /// Reads the content, from <see cref="Content"/> or <see cref="Data"/>, into an attachment with
-    /// the content as a data URL, then releases the browser stream.
+    /// Turns the file into an attachment: buffered, with the content as a data URL, when it is no
+    /// larger than <paramref name="maxInlineSize"/>; otherwise read on demand through
+    /// <see cref="Attachment.ContentFactory"/>.
     /// </summary>
     /// <param name="maxAllowedSize">The most bytes to accept; a longer stream fails the read.</param>
+    /// <param name="maxInlineSize">
+    /// The largest file to buffer in memory. Larger files keep <see cref="Content"/> open and read it
+    /// when the attachment is first opened. Defaults to buffering everything.
+    /// </param>
     /// <param name="cancellationToken">Cancels the read.</param>
     /// <returns>The attachment.</returns>
     /// <exception cref="InvalidOperationException">The file carries no content at all.</exception>
     /// <remarks>
     /// On Blazor Server the stream arrives in chunks sized to fit the circuit, so the file size is
-    /// bounded by <paramref name="maxAllowedSize"/> rather than by the SignalR message limit.
+    /// bounded by <paramref name="maxAllowedSize"/> rather than by the SignalR message limit. A
+    /// buffered file releases the browser stream; a lazy one keeps it, since it is the only route to
+    /// the bytes, and the caller releases it when the attachment is discarded.
     /// </remarks>
-    public async Task<Attachment> ToAttachmentAsync(long maxAllowedSize, CancellationToken cancellationToken = default)
+    public async Task<Attachment> ToAttachmentAsync(
+        long maxAllowedSize,
+        long maxInlineSize = long.MaxValue,
+        CancellationToken cancellationToken = default)
     {
         if (Content is not { } content) return ToAttachment();
+
+        if (Size > maxInlineSize)
+        {
+            return CreateLazyAttachment(
+                Name,
+                ContentType,
+                Size,
+                ct => content.OpenReadStreamAsync(maxAllowedSize, ct),
+                PreviewUrl);
+        }
 
         await using (content.ConfigureAwait(false))
         {
@@ -104,15 +138,37 @@ public sealed record ComposerFile(string Name, string ContentType, long Size, st
         }
     }
 
-    private Attachment Create(byte[] bytes) => CreateAttachment(Name, ContentType, bytes);
+    private Attachment Create(byte[] bytes) => CreateAttachment(Name, ContentType, bytes, PreviewUrl);
 
-    internal static Attachment CreateAttachment(string name, string contentType, byte[] bytes) => new(AiId.New("att"), name)
-    {
-        ContentType = contentType,
-        Size = bytes.LongLength,
-        Kind = Attachment.InferKind(contentType, name),
-        Data = bytes,
-        Url = $"data:{contentType};base64,{Convert.ToBase64String(bytes)}",
-        Status = AttachmentStatus.Ready,
-    };
+    internal static Attachment CreateAttachment(string name, string contentType, byte[] bytes, string? previewUrl = null) =>
+        new(AiId.New("att"), name)
+        {
+            ContentType = contentType,
+            Size = bytes.LongLength,
+            Kind = Attachment.InferKind(contentType, name),
+            Data = bytes,
+            Url = $"data:{contentType};base64,{Convert.ToBase64String(bytes)}",
+            ThumbnailUrl = previewUrl,
+            Status = AttachmentStatus.Ready,
+        };
+
+    /// <remarks>
+    /// No bytes are held: the factory opens the browser file when something needs the content, and
+    /// the preview, when there is one, is an object URL the browser owns.
+    /// </remarks>
+    internal static Attachment CreateLazyAttachment(
+        string name,
+        string contentType,
+        long size,
+        Func<CancellationToken, ValueTask<Stream>> open,
+        string? previewUrl) =>
+        new(AiId.New("att"), name)
+        {
+            ContentType = contentType,
+            Size = size,
+            Kind = Attachment.InferKind(contentType, name),
+            ContentFactory = open,
+            ThumbnailUrl = previewUrl,
+            Status = AttachmentStatus.Ready,
+        };
 }

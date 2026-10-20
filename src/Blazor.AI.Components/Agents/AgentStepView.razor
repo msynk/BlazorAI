@@ -1,10 +1,10 @@
 @namespace Blazor.AI.Components
 @inherits AiComponentBase
-@implements IDisposable
 
 @*
     One step of a run, drawn as a timeline entry so the sequence and the current position read at a
-    glance.
+    glance. The tool calls a step made are listed under it, so "search the docs" shows which searches
+    actually ran.
 *@
 
 <div class="bai-step bai-step--@Step.Status.ToString().ToLowerInvariant()">
@@ -17,7 +17,11 @@
     <div class="bai-step__body">
         <div class="bai-step__title">
             @Step.Title
-            @if (Step.Duration is { } duration && Step.Status is not AgentStepStatus.Running)
+            @if (Step.Status is AgentStepStatus.Running && Step.StartedAt is { } startedAt)
+            {
+                <span class="bai-chip bai-step__elapsed">@Strings.FormatDuration(DateTimeOffset.UtcNow - startedAt)</span>
+            }
+            else if (Step.Duration is { } duration && Step.Status is not AgentStepStatus.Running)
             {
                 <span class="bai-chip">@Strings.FormatDuration(duration)</span>
             }
@@ -29,6 +33,28 @@
         @if (Step.Summary is { Length: > 0 } summary)
         {
             <div class="bai-step__summary">@summary</div>
+        }
+        @if (Step.ToolCallIds.Count > 0)
+        {
+            <ul class="bai-step__tools" aria-label="@Strings.ToolCalls">
+                @foreach (var toolCallId in Step.ToolCallIds)
+                {
+                    var call = FindToolCall(toolCallId);
+                    <li class="bai-chip @(call?.Status is ToolCallStatus.Failed ? "bai-chip--danger" : null)" @key="toolCallId"
+                        title="@(call is null ? toolCallId : call.ToolName)">
+                        <AiIcon Name="tool" />
+                        <span>@(call?.ToolName ?? toolCallId)</span>
+                        @if (call?.Status is ToolCallStatus.Running or ToolCallStatus.Streaming)
+                        {
+                            <span class="bai-thinking__dots" aria-hidden="true">
+                                <span class="bai-thinking__dot"></span>
+                                <span class="bai-thinking__dot"></span>
+                                <span class="bai-thinking__dot"></span>
+                            </span>
+                        }
+                    </li>
+                }
+            </ul>
         }
         @if (Step.Error is { } error)
         {
@@ -44,6 +70,13 @@
     [Parameter, EditorRequired]
     public AgentStep Step { get; set; } = default!;
 
+    /// <summary>
+    /// The conversation the run belongs to, used to show the tool calls the step made by name and
+    /// status. Without it the calls are listed by identifier.
+    /// </summary>
+    [Parameter]
+    public Conversation? Conversation { get; set; }
+
     /// <inheritdoc />
     protected override void OnParametersSet()
     {
@@ -55,10 +88,28 @@
 
     private void OnStepChanged(AgentStep step) => RequestRender();
 
+    private ToolCallPart? FindToolCall(string toolCallId)
+    {
+        if (Conversation is not { } conversation) return null;
+
+        var messages = conversation.Messages;
+        for (var i = messages.Count - 1; i >= 0; i--)
+        {
+            if (messages[i].FindToolCall(toolCallId) is { } call) return call;
+        }
+
+        return null;
+    }
+
     /// <inheritdoc />
-    public void Dispose()
+    /// <remarks>
+    /// Cleanup lives here rather than in <see cref="IDisposable.Dispose"/> because the renderer only
+    /// calls the asynchronous disposal on a component that offers it.
+    /// </remarks>
+    protected override ValueTask DisposeCoreAsync()
     {
         if (_subscribed is not null) _subscribed.Changed -= OnStepChanged;
         _subscribed = null;
+        return ValueTask.CompletedTask;
     }
 }

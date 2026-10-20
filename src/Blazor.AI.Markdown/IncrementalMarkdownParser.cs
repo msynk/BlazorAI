@@ -23,6 +23,11 @@ namespace Blazor.AI.Markdown;
 /// the blocks before a stable point are kept exactly as the parser produced them.
 /// </para>
 /// <para>
+/// A link reference or footnote definition makes text anywhere depend on text anywhere else, so
+/// once a document contains one it is parsed whole on every call. Those documents are rare in chat
+/// and the cost is the same as it was before incremental parsing existed.
+/// </para>
+/// <para>
 /// An instance is not thread-safe and belongs to one streaming text part.
 /// </para>
 /// </remarks>
@@ -32,10 +37,12 @@ public sealed class IncrementalMarkdownParser
     private readonly List<MarkdownBlock> _stable = [];
     private readonly List<int> _blockStarts = [];
     private readonly Queue<int> _candidates = new();
+    private readonly HashSet<string> _stableHeadingIds = new(StringComparer.Ordinal);
     private string _source = string.Empty;
     private int _stableLength;
     private int _scanned;
     private int _lastCandidate;
+    private bool _hasDefinitions;
 
     /// <summary>Creates a parser.</summary>
     /// <param name="options">Which extensions to enable.</param>
@@ -61,13 +68,28 @@ public sealed class IncrementalMarkdownParser
         if (!source.StartsWith(_source, StringComparison.Ordinal)) Reset();
         _source = source;
 
+        if (_hasDefinitions) return MarkdownParser.Parse(source, _options, isComplete);
+
         ScanForCandidates();
 
         var document = new MarkdownDocument();
         if (_stableLength < source.Length)
         {
             _blockStarts.Clear();
-            var tail = MarkdownParser.Parse(source[_stableLength..], _options, isComplete, _blockStarts);
+            var wholeSource = _stableLength == 0;
+            var tail = MarkdownParser.Parse(source[_stableLength..], _options, isComplete, _blockStarts, _stableHeadingIds, out var sawDefinitions);
+
+            if (sawDefinitions)
+            {
+                // The prefix was parsed without the definition, so it can no longer be trusted.
+                _hasDefinitions = true;
+                _stable.Clear();
+                _candidates.Clear();
+                _stableHeadingIds.Clear();
+                _stableLength = 0;
+                return wholeSource ? tail : MarkdownParser.Parse(source, _options, isComplete);
+            }
+
             var promoted = PromoteStableBlocks(tail.Blocks);
             document.Blocks.AddRange(_stable);
             document.Blocks.AddRange(tail.Blocks.GetRange(promoted, tail.Blocks.Count - promoted));
@@ -85,10 +107,12 @@ public sealed class IncrementalMarkdownParser
     {
         _stable.Clear();
         _candidates.Clear();
+        _stableHeadingIds.Clear();
         _source = string.Empty;
         _stableLength = 0;
         _scanned = 0;
         _lastCandidate = 0;
+        _hasDefinitions = false;
     }
 
     // Queues the start of each line that could begin a stable block, looking at each line once.
@@ -153,9 +177,26 @@ public sealed class IncrementalMarkdownParser
 
         if (promoted == 0) return 0;
 
-        _stable.AddRange(tail.GetRange(0, promoted));
+        var blocks = tail.GetRange(0, promoted);
+        _stable.AddRange(blocks);
         _stableLength += boundary;
+        CollectHeadingIds(blocks);
         return promoted;
+    }
+
+    // The tail is parsed knowing which identifiers the prefix took, so "## A" twice over gets
+    // "-2" on the second heading exactly as a one-shot parse would give it.
+    private void CollectHeadingIds(List<MarkdownBlock> blocks)
+    {
+        foreach (var block in blocks)
+        {
+            switch (block)
+            {
+                case HeadingBlock { Id: { } id }: _stableHeadingIds.Add(id); break;
+                case QuoteBlock quote: CollectHeadingIds(quote.Blocks); break;
+                case ListBlock list: foreach (var item in list.Items) CollectHeadingIds(item.Blocks); break;
+            }
+        }
     }
 
     /// <returns>

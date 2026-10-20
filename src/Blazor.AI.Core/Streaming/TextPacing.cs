@@ -142,7 +142,11 @@ public static class AiEventStreamExtensions
         using var pumpCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _ = PumpAsync(source, channel.Writer, pumpCts.Token);
 
+        // Text deltas for the part currently being paced accumulate in `pending`; every other event
+        // waits in `deferred` until that text has drained. Order is preserved, and a MessageCompleted
+        // that arrives right behind the last token no longer dumps the whole backlog in one frame.
         var pending = new StringBuilder();
+        var deferred = new Queue<AiEvent>();
         string? pendingPartId = null;
         string? pendingMessageId = null;
         var completed = false;
@@ -154,7 +158,7 @@ public static class AiEventStreamExtensions
             {
                 while (channel.Reader.TryRead(out var evt))
                 {
-                    if (evt is TextDeltaEvent text
+                    if (evt is TextDeltaEvent text && deferred.Count == 0
                         && (pending.Length == 0 || (text.PartId == pendingPartId && text.MessageId == pendingMessageId)))
                     {
                         pendingPartId = text.PartId;
@@ -163,12 +167,22 @@ public static class AiEventStreamExtensions
                         continue;
                     }
 
-                    while (pending.Length > 0)
+                    if (pending.Length == 0)
                     {
-                        yield return Take(pending, pending.Length, pendingPartId, pendingMessageId);
+                        yield return evt;
+                        continue;
                     }
 
-                    yield return evt;
+                    // A terminal error outranks smoothness: flush everything and surface it now.
+                    if (evt is ErrorEvent { IsTerminal: true })
+                    {
+                        while (pending.Length > 0) yield return Take(pending, pending.Length, pendingPartId, pendingMessageId);
+                        while (deferred.TryDequeue(out var queued)) yield return queued;
+                        yield return evt;
+                        continue;
+                    }
+
+                    deferred.Enqueue(evt);
                 }
 
                 if (pending.Length > 0)
@@ -180,13 +194,19 @@ public static class AiEventStreamExtensions
 
                     yield return Take(pending, size, pendingPartId, pendingMessageId);
 
-                    if (pending.Length > 0 || !completed)
+                    if (pending.Length == 0)
                     {
-                        await Task.Delay(settings.Interval, cancellationToken).ConfigureAwait(false);
+                        // Drained: release what queued behind the text, then look for more input
+                        // straight away so a following part starts pacing without a gap.
+                        while (deferred.TryDequeue(out var queued)) yield return queued;
+                        continue;
                     }
 
+                    await Task.Delay(settings.Interval, cancellationToken).ConfigureAwait(false);
                     continue;
                 }
+
+                while (deferred.TryDequeue(out var queued)) yield return queued;
 
                 if (completed) yield break;
                 if (!await channel.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false)) completed = true;

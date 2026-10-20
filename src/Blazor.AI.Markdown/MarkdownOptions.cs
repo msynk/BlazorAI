@@ -52,4 +52,32 @@ public sealed record MarkdownOptions
     /// one arrives. With it, the delimiter stays invisible until it either closes or the stream ends.
     /// </remarks>
     public bool HideDanglingDelimiters { get; init; } = true;
+
+    /// <summary>
+    /// How deeply blocks and inline spans may nest before further markers are read as literal text.
+    /// </summary>
+    /// <remarks>
+    /// Bounds both the parser's recursion and the depth of the tree a renderer has to walk. A line
+    /// of ten thousand <c>&gt;</c> characters, or as many nested brackets, must not take down the
+    /// process. The default of 32 is far deeper than any document a person or a model writes.
+    /// </remarks>
+    public int MaxNestingDepth { get; init; } = 32;
+
+    /// <summary>
+    /// Treat a single newline inside a paragraph as a line break, as chat clients often do.
+    /// </summary>
+    /// <remarks>
+    /// CommonMark renders a soft break as a space. Models fine-tuned on chat transcripts tend to
+    /// write one line per sentence and mean the line breaks, so a host may prefer to keep them.
+    /// </remarks>
+    public bool SoftBreaksAsHardBreaks { get; init; }
+
+    /// <summary>
+    /// Parse footnotes: <c>[^1]</c> in the text with a matching <c>[^1]: note</c> definition.
+    /// </summary>
+    /// <remarks>
+    /// Referenced footnotes are collected on <see cref="MarkdownDocument.Footnotes"/> in the order
+    /// they are first cited, numbered from one, and are not left in the block flow.
+    /// </remarks>
+    public bool Footnotes { get; init; } = true;
 }

@@ -2,15 +2,16 @@
 @inherits AiComponentBase
 
 @*
-    The collapsed panel that holds model reasoning.
+    The collapsible panel that holds model reasoning.
 
-    Open by default while the model is still thinking, so the user sees progress, and collapsed once
-    the answer arrives, so the reasoning does not compete with it.
+    Open while the model is still thinking, so the user sees progress rather than a spinner, and
+    collapsed once the answer starts arriving (when CollapseReasoning is on), so the reasoning does
+    not compete with it. A user who opened or closed the panel by hand wins over both defaults.
 *@
 
 <AiCollapsible Class="bai-reasoning"
                Open="@_open"
-               OpenChanged="@(open => _open = open)">
+               OpenChanged="OnUserToggled">
     <Header>
         <AiIcon Name="brain" />
         <span class="bai-panel__title">@Title</span>
@@ -24,13 +25,15 @@
         }
     </Header>
     <ChildContent>
-        @Part.Text
+        <StreamingMarkdown Text="@Part.Text" IsStreaming="@Part.IsStreaming" Class="bai-reasoning__body" />
     </ChildContent>
 </AiCollapsible>
 
 @code {
     private bool _open;
-    private bool _initialised;
+    private bool _userDecided;
+    private bool _wasStreaming;
+    private ReasoningPart? _subscribed;
 
     /// <summary>The reasoning to render.</summary>
     [Parameter, EditorRequired]
@@ -43,8 +46,46 @@
     /// <inheritdoc />
     protected override void OnParametersSet()
     {
-        if (_initialised) return;
-        _initialised = true;
-        _open = Part.IsStreaming && !Options.CollapseReasoning;
+        if (!ReferenceEquals(_subscribed, Part))
+        {
+            if (_subscribed is not null) _subscribed.Changed -= OnPartChanged;
+            _subscribed = Part;
+            _subscribed.Changed += OnPartChanged;
+            _userDecided = false;
+            _wasStreaming = Part.IsStreaming;
+            _open = Part.IsStreaming || !Options.CollapseReasoning;
+        }
+
+        ApplyAutoState();
+    }
+
+    private void OnPartChanged(MessagePart part)
+    {
+        ApplyAutoState();
+        RequestRender();
+    }
+
+    private void ApplyAutoState()
+    {
+        if (_wasStreaming == Part.IsStreaming) return;
+        _wasStreaming = Part.IsStreaming;
+
+        // Streaming just finished: collapse unless the host wants reasoning visible or the user
+        // already made a choice.
+        if (!Part.IsStreaming && !_userDecided && Options.CollapseReasoning) _open = false;
+    }
+
+    private void OnUserToggled(bool open)
+    {
+        _open = open;
+        _userDecided = true;
+    }
+
+    /// <inheritdoc />
+    protected override ValueTask DisposeCoreAsync()
+    {
+        if (_subscribed is not null) _subscribed.Changed -= OnPartChanged;
+        _subscribed = null;
+        return ValueTask.CompletedTask;
     }
 }

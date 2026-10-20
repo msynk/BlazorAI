@@ -101,39 +101,11 @@ public sealed class GenerativeComponent
         return JsonSerializer.SerializeToElement(schema);
     }
 
-    private static Dictionary<string, object?> SchemaFor(GenerativeProperty property)
-    {
-        var type = Nullable.GetUnderlyingType(property.Type) ?? property.Type;
-        var node = new Dictionary<string, object?>(StringComparer.Ordinal);
-
-        // Every type must be described the way the binder reads it: a model told "object" for a date
-        // sends an object, and a model told "array" for a dictionary sends an array, and neither binds.
-        node["type"] = type switch
-        {
-            _ when type == typeof(string) || type == typeof(char) => "string",
-            _ when type == typeof(bool) => "boolean",
-            _ when type == typeof(int) || type == typeof(long) || type == typeof(short) || type == typeof(byte)
-                || type == typeof(uint) || type == typeof(ulong) || type == typeof(ushort) || type == typeof(sbyte) => "integer",
-            _ when type == typeof(double) || type == typeof(float) || type == typeof(decimal) => "number",
-            _ when type.IsEnum => "string",
-            _ when type == typeof(DateTime) || type == typeof(DateTimeOffset) || type == typeof(DateOnly)
-                || type == typeof(TimeOnly) || type == typeof(TimeSpan) || type == typeof(Guid) || type == typeof(Uri) => "string",
-            _ when IsDictionary(type) => "object",
-            _ when typeof(System.Collections.IEnumerable).IsAssignableFrom(type) => "array",
-            _ => "object",
-        };
-
-        if (type.IsEnum) node["enum"] = Enum.GetNames(type);
-        if (property.Description is not null) node["description"] = property.Description;
-
-        return node;
-    }
-
-    private static bool IsDictionary(Type type) =>
-        typeof(System.Collections.IDictionary).IsAssignableFrom(type)
-        || (type.IsGenericType && IsDictionaryDefinition(type.GetGenericTypeDefinition()))
-        || type.GetInterfaces().Any(i => i.IsGenericType && IsDictionaryDefinition(i.GetGenericTypeDefinition()));
-
-    private static bool IsDictionaryDefinition(Type definition) =>
-        definition == typeof(IDictionary<,>) || definition == typeof(IReadOnlyDictionary<,>);
+    /// <summary>
+    /// Describes one property as JSON Schema, the way the binder reads it: nested objects with their
+    /// own <c>properties</c>, collections with <c>items</c>, enumerations as their names, and dates,
+    /// identifiers and addresses as formatted strings. See <see cref="GenerativeSchema"/>.
+    /// </summary>
+    private static Dictionary<string, object?> SchemaFor(GenerativeProperty property) =>
+        GenerativeSchema.Describe(property.Type, property.Description);
 }

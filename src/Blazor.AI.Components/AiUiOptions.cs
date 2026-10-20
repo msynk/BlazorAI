@@ -29,6 +29,14 @@ public sealed record AiUiOptions
     /// <summary>Which Markdown extensions to enable.</summary>
     public MarkdownOptions Markdown { get; init; } = MarkdownOptions.Default;
 
+    /// <summary>Which images in Markdown are fetched and shown.</summary>
+    /// <remarks>
+    /// Images are allowed by default. A host handling sensitive conversations can restrict them to
+    /// listed hosts, load them only on request, or block them; see <see cref="AiImagePolicy"/>.
+    /// Script-capable URL schemes are neutralised whatever the policy.
+    /// </remarks>
+    public AiImagePolicy Images { get; init; } = AiImagePolicy.Allow;
+
     /// <summary>The minimum time between renders while streaming.</summary>
     /// <remarks>
     /// The single most important performance dial. Raising it on Blazor Server reduces circuit

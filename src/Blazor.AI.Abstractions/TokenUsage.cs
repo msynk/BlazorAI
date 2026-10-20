@@ -41,11 +41,13 @@ public readonly record struct TokenUsage
     /// <summary>
     /// Total tokens, summing input and output when either is present.
     /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
     public long? TotalTokens => InputTokens is null && OutputTokens is null
         ? null
         : (InputTokens ?? 0) + (OutputTokens ?? 0);
 
     /// <summary><see langword="true"/> when no field carries a value.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
     public bool IsEmpty => InputTokens is null && OutputTokens is null && CachedInputTokens is null
         && CacheWriteTokens is null && ReasoningTokens is null && Cost is null;
 
@@ -71,6 +73,28 @@ public readonly record struct TokenUsage
     /// <param name="right">The right operand.</param>
     /// <returns>The combined usage.</returns>
     public static TokenUsage Add(TokenUsage left, TokenUsage right) => left + right;
+
+    /// <summary>
+    /// Overlays a newer snapshot on an older one field by field: a field the newer snapshot
+    /// reports replaces the old value, a field it omits keeps the old value.
+    /// </summary>
+    /// <remarks>
+    /// This is how a message accumulates usage from a provider that reports input tokens at the
+    /// start of a generation and output tokens at the end, without either report erasing the other.
+    /// </remarks>
+    /// <param name="existing">The usage known so far.</param>
+    /// <param name="update">The newer report.</param>
+    /// <returns>The merged usage.</returns>
+    public static TokenUsage Merge(TokenUsage existing, TokenUsage update) => new()
+    {
+        InputTokens = update.InputTokens ?? existing.InputTokens,
+        OutputTokens = update.OutputTokens ?? existing.OutputTokens,
+        CachedInputTokens = update.CachedInputTokens ?? existing.CachedInputTokens,
+        CacheWriteTokens = update.CacheWriteTokens ?? existing.CacheWriteTokens,
+        ReasoningTokens = update.ReasoningTokens ?? existing.ReasoningTokens,
+        Cost = update.Cost ?? existing.Cost,
+        Currency = update.Currency ?? existing.Currency,
+    };
 
     private static long? Sum(long? a, long? b) => a is null && b is null ? null : (a ?? 0) + (b ?? 0);
 }
@@ -105,12 +129,14 @@ public sealed record GenerationMetadata
     public TimeSpan? TimeToFirstToken { get; init; }
 
     /// <summary>Total wall-clock duration of the generation.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
     public TimeSpan? Duration => StartedAt is { } s && CompletedAt is { } c ? c - s : null;
 
     /// <summary>
     /// Output tokens per second over the streaming window, or <see langword="null"/> when it cannot
     /// be computed from the reported values.
     /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
     public double? TokensPerSecond
     {
         get

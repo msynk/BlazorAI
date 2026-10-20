@@ -60,6 +60,19 @@ submits it as a user message and the agent continues from the step it stopped at
 await session.RespondToAgentAsync(runId, answer);
 ```
 
+Suggestions are shortcuts, not the only way through. The waiting run also offers a text box, so a
+question with no suggestions, or one whose right answer nobody suggested, can still be answered;
+Enter or the Answer button sends it.
+
+Where the answer goes is either/or. With `OnRespond` set, `AgentRunView` hands the answer to the
+callback and does not touch the session; without it, the view calls
+`Session.RespondToAgentAsync` itself. Wiring both would otherwise resolve the run twice and append
+the answer twice.
+
+```razor
+<AgentRunView Run="run" OnRespond="answer => _agent.ContinueAsync(run.RunId, answer)" />
+```
+
 This is the difference between an agent that asks and one that guesses. The state is explicit, so
 waiting can be made to look deliberate rather than stuck.
 
@@ -86,6 +99,14 @@ reporting that something did.
 `AiChat` renders any run attached to a message automatically. The component draws a timeline: a
 marker per step that pulses while running, fills green on success and red on failure, plus a
 progress meter, elapsed time, and the pending question when there is one.
+
+The elapsed time ticks while the run is active (once a second by default; `ClockInterval` changes
+it) and freezes at the final figure when the run ends, so a stalled run looks stalled and a finished
+one costs nothing to keep on screen. The running step shows its own elapsed time the same way.
+
+Each step lists the tool calls it made (`AgentStep.ToolCallIds`) as chips. Given the conversation,
+through `Session` or `AgentStepView.Conversation`, the chips show the tool's name and state; without
+it they show the identifiers.
 
 Each step subscribes to itself, so a step completing re-renders one row rather than the run.
 

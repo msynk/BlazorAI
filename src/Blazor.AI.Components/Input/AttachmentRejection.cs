@@ -13,6 +13,9 @@ public enum AttachmentRejectionReason
 
     /// <summary>The browser could not deliver the content, or the transfer was interrupted.</summary>
     ReadFailed = 2,
+
+    /// <summary>Staging the file would exceed <see cref="PromptInput.MaxAttachments"/>.</summary>
+    TooMany = 3,
 }
 
 /// <summary>

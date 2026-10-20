@@ -65,5 +65,6 @@ public sealed record AiToolDefinition
     public IReadOnlyDictionary<string, object?>? Metadata { get; init; }
 
     /// <summary>The label to show for this tool.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
     public string DisplayName => Title ?? Name;
 }

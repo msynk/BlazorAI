@@ -33,8 +33,11 @@ public interface IGenerativeUiRegistry
 /// <remarks>
 /// Registration derives the bindable property list from the component public
 /// <see cref="ParameterAttribute"/> properties, minus the ones no model should ever set:
-/// callbacks, render fragments, and unmatched-attribute catch-alls. That exclusion is what stops a
-/// generated payload from wiring up event handlers or injecting attributes.
+/// callbacks, render fragments, unmatched-attribute catch-alls, anything marked
+/// <see cref="GenerativeIgnoreAttribute"/>, and any type whose object graph contains a delegate or a
+/// <see cref="Type"/>. That exclusion is what stops a generated payload from wiring up event
+/// handlers or injecting attributes. A <c>[Required]</c> data annotation marks a parameter required
+/// without naming it at registration.
 /// </remarks>
 public sealed class GenerativeUiRegistry : IGenerativeUiRegistry
 {
@@ -91,6 +94,7 @@ public sealed class GenerativeUiRegistry : IGenerativeUiRegistry
         }
 
         var properties = DiscoverProperties(componentType, required);
+        description ??= componentType.GetCustomAttribute<DescriptionAttribute>()?.Description;
         var component = new GenerativeComponent(name, componentType, properties, description);
         _components[name] = component;
         return component;
@@ -147,23 +151,27 @@ public sealed class GenerativeUiRegistry : IGenerativeUiRegistry
             var parameter = property.GetCustomAttribute<ParameterAttribute>();
             if (parameter is null || parameter.CaptureUnmatchedValues) continue;
             if (property.SetMethod is null || !property.SetMethod.IsPublic) continue;
+            if (property.GetCustomAttribute<GenerativeIgnoreAttribute>() is not null) continue;
             if (!IsBindable(property.PropertyType)) continue;
 
             var description = property.GetCustomAttribute<DescriptionAttribute>()?.Description;
-            var isRequired = required.Contains(property.Name, StringComparer.OrdinalIgnoreCase);
+            var isRequired = required.Contains(property.Name, StringComparer.OrdinalIgnoreCase)
+                || property.GetCustomAttribute<System.ComponentModel.DataAnnotations.RequiredAttribute>() is not null;
             results.Add(new GenerativeProperty(property.Name, property.PropertyType, description, isRequired));
         }
 
         return results;
     }
 
-    private static bool IsBindable(Type type)
+    /// <summary>
+    /// Whether a parameter type is plain data a model may supply. Delegates, render fragments,
+    /// event callbacks, <see cref="Type"/>, and any object graph that contains one are refused.
+    /// </summary>
+    /// <param name="type">The parameter type.</param>
+    /// <returns><see langword="true"/> when the type may be bound.</returns>
+    public static bool IsBindable(Type type)
     {
-        if (typeof(Delegate).IsAssignableFrom(type)) return false;
-        if (type == typeof(RenderFragment) || type == typeof(EventCallback)) return false;
-        if (!type.IsGenericType) return true;
-
-        var definition = type.GetGenericTypeDefinition();
-        return definition != typeof(RenderFragment<>) && definition != typeof(EventCallback<>);
+        ArgumentNullException.ThrowIfNull(type);
+        return GenerativeSchema.IsBindable(type);
     }
 }

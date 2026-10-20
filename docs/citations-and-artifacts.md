@@ -53,6 +53,17 @@ Handle activation to show a source in a side panel rather than navigating away:
 Replace the chip entirely through `AiRendererRegistry.CitationRenderer`, or restyle it with the
 accent tokens.
 
+### URL safety
+
+Source URLs come from the model or from retrieved content, and Blazor writes an `href` or `src` as
+given, so they are never trusted as addresses. `SourceCard` renders a source as a link only when
+its `Url` parses as an absolute `http` or `https` address; anything else, such as a `javascript:`
+or `data:` URL, renders the same card as a button that raises `OnActivate` and navigates nowhere.
+The site name falls back to the host only for a safe URL. `IconUrl` is loaded only when it is a web
+address or a `data:image/...` payload that is not SVG, since an image can carry script where a
+bitmap cannot. `SourceList` and the citation marker go through the same card, so there is no second
+path for a URL to reach the page.
+
 ## Artifacts
 
 An artifact is substantial content produced alongside the conversation: a document, a program, a

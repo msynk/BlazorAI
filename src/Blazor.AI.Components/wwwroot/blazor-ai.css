@@ -205,8 +205,13 @@
   --bai-syntax-meta: #757c8a;
 }
 
+/* The system preference applies to the page root, and only when the root itself has not chosen a
+   scheme. A region that chooses one (an AiTheme with Theme set, or an element carrying
+   data-bai-theme or a .bai-theme-* class) restates the whole palette on itself above, so an explicit
+   light region stays light inside a page the system has made dark, and an explicit dark region stays
+   dark on a light page. */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-bai-theme="light"]) {
+  :root:not([data-bai-theme="light"]):not(.bai-theme-light) {
     color-scheme: dark;
     --bai-color-bg: #17181c;
     --bai-color-bg-subtle: #1d1f24;
@@ -326,12 +331,6 @@
   border-radius: var(--bai-radius-sm);
 }
 
-/* The attach button is a label around a visually hidden file input; show the ring on the label. */
-.bai-btn:has(> input:focus-visible) {
-  outline: 2px solid var(--bai-color-focus);
-  outline-offset: 2px;
-}
-
 .bai-sr-only {
   position: absolute;
   width: 1px;
@@ -423,7 +422,7 @@
   background: var(--bai-user-bg);
   color: var(--bai-user-fg, var(--bai-color-fg));
   border-radius: var(--bai-radius-lg);
-  border-bottom-right-radius: var(--bai-radius-sm);
+  border-end-end-radius: var(--bai-radius-sm);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -624,7 +623,7 @@
 .bai-prose ul,
 .bai-prose ol {
   margin: 0;
-  padding-left: var(--bai-space-5);
+  padding-inline-start: var(--bai-space-5);
   display: flex;
   flex-direction: column;
   gap: var(--bai-space-1);
@@ -646,7 +645,7 @@
 
 .bai-task-list {
   list-style: none;
-  padding-left: 0;
+  padding-inline-start: 0;
 }
 
 .bai-task-list__item {
@@ -662,8 +661,8 @@
 
 .bai-prose blockquote {
   margin: 0;
-  padding-left: var(--bai-space-4);
-  border-left: 3px solid var(--bai-color-border-strong);
+  padding-inline-start: var(--bai-space-4);
+  border-inline-start: 3px solid var(--bai-color-border-strong);
   color: var(--bai-color-fg-muted);
   display: flex;
   flex-direction: column;
@@ -717,7 +716,7 @@
 .bai-prose th,
 .bai-prose td {
   padding: var(--bai-space-2) var(--bai-space-3);
-  text-align: left;
+  text-align: start;
   border-bottom: 1px solid var(--bai-color-border);
 }
 
@@ -748,12 +747,70 @@
   text-align: center;
 }
 
+/* Footnotes: listed after the text, each with a link back to where it was cited. */
+.bai-footnote-ref {
+  font-size: 0.75em;
+  line-height: 1;
+  vertical-align: super;
+}
+
+.bai-footnote-ref a,
+.bai-footnote-backref {
+  text-decoration: none;
+  padding: 0 0.15em;
+}
+
+.bai-footnotes {
+  margin-top: var(--bai-space-4);
+  padding-top: var(--bai-space-3);
+  border-top: 1px solid var(--bai-color-border);
+  font-size: 0.875em;
+  color: var(--bai-color-text-muted);
+}
+
+.bai-footnotes ol {
+  padding-left: 1.5em;
+}
+
+.bai-footnotes li > p:last-child {
+  display: inline;
+}
+
+/* Images held back by the image policy: a placeholder that loads on request, or the alt text. */
+.bai-image-placeholder {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--bai-space-2);
+  padding: var(--bai-space-2) var(--bai-space-3);
+  border: 1px dashed var(--bai-color-border);
+  border-radius: var(--bai-radius-sm);
+  background: var(--bai-color-bg-subtle);
+  color: var(--bai-color-text-muted);
+  font: inherit;
+  font-size: 0.875em;
+  cursor: pointer;
+}
+
+.bai-image-placeholder:hover {
+  color: var(--bai-color-text);
+}
+
+.bai-image-blocked {
+  font-style: italic;
+  color: var(--bai-color-text-muted);
+}
+
+/* Code blocks: a variable introduced by a sigil, such as PowerShell's $name. */
+.bai-tok-variable {
+  color: var(--bai-syntax-variable, var(--bai-syntax-property));
+}
+
 /* The caret that trails streaming text. */
 .bai-caret {
   display: inline-block;
   width: 0.45em;
   height: 1.05em;
-  margin-left: 1px;
+  margin-inline-start: 1px;
   vertical-align: text-bottom;
   background: var(--bai-color-accent);
   border-radius: 1px;
@@ -780,7 +837,8 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--bai-space-2);
-  padding: var(--bai-space-1) var(--bai-space-2) var(--bai-space-1) var(--bai-space-3);
+  padding-block: var(--bai-space-1);
+  padding-inline: var(--bai-space-3) var(--bai-space-2);
   background: var(--bai-color-bg-subtle);
   border-bottom: 1px solid var(--bai-color-border);
   font-size: var(--bai-font-size-xs);
@@ -824,8 +882,8 @@
   content: counter(bai-line);
   display: inline-block;
   width: 2.5em;
-  margin-right: var(--bai-space-3);
-  text-align: right;
+  margin-inline-end: var(--bai-space-3);
+  text-align: end;
   color: var(--bai-color-fg-subtle);
   user-select: none;
 }
@@ -870,7 +928,7 @@
   color: var(--bai-color-fg-muted);
   background: none;
   border: none;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
 }
 
@@ -901,6 +959,27 @@
 
 .bai-panel--open > .bai-panel__header .bai-panel__chevron {
   transform: rotate(90deg);
+}
+
+/* Directional icons point into the reading direction. A chevron that opens a panel points at the
+   text it belongs to; the send arrow points the way the text runs. Two selectors per rule, in
+   separate rules, because an engine without :dir() would drop a combined list entirely. */
+[dir="rtl"] .bai-panel__chevron,
+[dir="rtl"] .bai-composer__send .bai-icon {
+  transform: scaleX(-1);
+}
+
+.bai-panel__chevron:dir(rtl),
+.bai-composer__send .bai-icon:dir(rtl) {
+  transform: scaleX(-1);
+}
+
+[dir="rtl"] .bai-panel--open > .bai-panel__header .bai-panel__chevron {
+  transform: scaleX(-1) rotate(90deg);
+}
+
+.bai-panel--open > .bai-panel__header .bai-panel__chevron:dir(rtl) {
+  transform: scaleX(-1) rotate(90deg);
 }
 
 .bai-reasoning .bai-panel__body {
@@ -1001,7 +1080,7 @@
 .bai-step::before {
   content: "";
   position: absolute;
-  left: 7px;
+  inset-inline-start: 7px;
   top: 1.6rem;
   bottom: -0.25rem;
   width: 2px;
@@ -1452,12 +1531,53 @@
   color: var(--bai-color-fg-subtle);
 }
 
+/* The hint and the character counter share one line under the composer. */
+.bai-composer__footer {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--bai-space-3);
+  padding: 0 var(--bai-space-2);
+}
+
+.bai-composer__footer .bai-composer__hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+}
+
+.bai-composer__counter {
+  margin-inline-start: auto;
+  font-size: var(--bai-font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--bai-color-fg-subtle);
+  white-space: nowrap;
+}
+
+.bai-composer__counter--near {
+  color: var(--bai-color-warning);
+}
+
+.bai-composer__counter--over {
+  color: var(--bai-color-danger);
+}
+
+/* Provisional dictation: shown under the text, in a quieter voice, until the phrase is final. */
+.bai-composer__interim {
+  padding: 0 var(--bai-space-2);
+  font-size: var(--bai-font-size-sm);
+  font-style: italic;
+  color: var(--bai-color-fg-muted);
+  overflow-wrap: anywhere;
+}
+
 /* Files the composer turned away, and why. */
 .bai-composer__notice {
   display: flex;
   align-items: flex-start;
   gap: var(--bai-space-2);
-  padding: var(--bai-space-1) var(--bai-space-1) var(--bai-space-1) var(--bai-space-3);
+  padding-block: var(--bai-space-1);
+  padding-inline: var(--bai-space-3) var(--bai-space-1);
   border-radius: var(--bai-radius);
   background: var(--bai-color-danger-subtle);
   color: var(--bai-color-danger);
@@ -1515,7 +1635,7 @@
 
 .bai-menu--above {
   bottom: calc(100% + var(--bai-space-2));
-  left: 0;
+  inset-inline-start: 0;
 }
 
 .bai-menu__item {
@@ -1530,7 +1650,7 @@
   color: inherit;
   font: inherit;
   font-size: var(--bai-font-size-sm);
-  text-align: left;
+  text-align: start;
   cursor: pointer;
 }
 
@@ -1587,7 +1707,7 @@
   color: inherit;
   font: inherit;
   font-size: var(--bai-font-size-sm);
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   width: 100%;
 }
@@ -1802,9 +1922,76 @@
     scroll-behavior: auto !important;
   }
 
+  /* Named as well, for a component rendered outside a .bai root. Every animation and transition in
+     this file appears in one of these two lists. */
+  .bai-message__enter,
+  .bai-backdrop,
+  .bai-scroll-latest,
+  .bai-thinking__dot,
+  .bai-step--running .bai-step__marker,
+  .bai-progress--indeterminate .bai-progress__bar {
+    animation: none;
+  }
+
+  .bai-btn,
+  .bai-composer,
+  .bai-message__actions,
+  .bai-source,
+  .bai-panel__chevron,
+  .bai-progress__bar,
+  .bai-meter__fill {
+    transition: none;
+  }
+
+  .bai-chat__scroll {
+    scroll-behavior: auto;
+  }
+
   .bai-caret {
     animation: none;
     opacity: 0.8;
+  }
+}
+
+@media (prefers-contrast: more) {
+  /* Declared on every element that chooses a scheme, so each resolves against its own palette. */
+  :root,
+  .bai-theme,
+  .bai-theme-light,
+  .bai-theme-dark,
+  [data-bai-theme] {
+    --bai-color-border: var(--bai-color-fg-muted);
+    --bai-color-border-strong: var(--bai-color-fg);
+    --bai-color-fg-subtle: var(--bai-color-fg-muted);
+  }
+
+  .bai :focus-visible {
+    outline-width: 3px;
+  }
+
+  .bai-btn--primary,
+  .bai-chip,
+  .bai-suggestion {
+    border: 1px solid currentColor;
+  }
+
+  .bai-chip--muted {
+    border-style: solid;
+  }
+
+  .bai-menu__item--active,
+  .bai-conversation--active {
+    outline: 2px solid currentColor;
+    outline-offset: -2px;
+  }
+
+  .bai-composer__drop {
+    background: var(--bai-color-bg);
+  }
+
+  /* Hover-revealed actions are always shown: a faded control is the opposite of more contrast. */
+  .bai-message__actions {
+    opacity: 1;
   }
 }
 
@@ -1814,19 +2001,135 @@
   .bai-source,
   .bai-composer,
   .bai-composer__notice,
-  .bai-artifact {
+  .bai-artifact,
+  .bai-menu,
+  .bai-attachment,
+  .bai-form {
     border: 1px solid CanvasText;
+  }
+
+  .bai :focus-visible,
+  .bai-input:focus,
+  .bai-select:focus,
+  .bai-textarea:focus {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+
+  /* Background colour is removed in forced colours, so the active option needs an outline. */
+  .bai-menu__item--active,
+  .bai-conversation--active {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .bai-composer__drop {
+    outline: 2px dashed Highlight;
+    outline-offset: -4px;
+  }
+
+  .bai-btn,
+  .bai-suggestion {
+    border: 1px solid ButtonText;
+  }
+
+  .bai-progress__bar,
+  .bai-meter__fill,
+  .bai-caret {
+    background: Highlight;
   }
 }
 
 @media print {
-  .bai-chat__footer,
+  /* The composer, its menu, and the scroll button are interactive; the footer may hold content the
+     host wants printed, so only those are hidden. */
+  .bai-composer,
+  .bai-menu,
+  .bai-scroll-latest,
   .bai-message__actions,
-  .bai-scroll-latest {
+  .bai-backdrop {
     display: none !important;
+  }
+
+  .bai-chat {
+    height: auto;
+  }
+
+  .bai-chat__footer {
+    background: none;
   }
 
   .bai-chat__scroll {
     overflow: visible;
   }
 }
+
+/* Forms: nested groups and list editors */
+.bai-fieldset {
+  margin: 0;
+  padding: var(--bai-space-3);
+  border: 1px solid var(--bai-color-border);
+  border-radius: var(--bai-radius-sm);
+  min-inline-size: 0;
+}
+
+.bai-fieldset > legend {
+  padding: 0 var(--bai-space-1);
+}
+
+.bai-form__item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--bai-space-2);
+}
+
+.bai-form__item-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--bai-space-2);
+  min-width: 0;
+}
+
+.bai-form__remove {
+  flex: 0 0 auto;
+  margin-block-start: var(--bai-space-1);
+}
+
+.bai-form__add {
+  align-self: flex-start;
+}
+
+.bai-field--invalid.bai-fieldset {
+  border-color: var(--bai-color-danger);
+}
+
+/* Agent runs: free-text answer, clock, per-step tool calls */
+.bai-run__answer {
+  display: flex;
+  flex: 1 1 100%;
+  gap: var(--bai-space-2);
+  align-items: center;
+}
+
+.bai-run__answer .bai-input {
+  flex: 1 1 auto;
+}
+
+.bai-run__elapsed,
+.bai-step__elapsed {
+  font-variant-numeric: tabular-nums;
+}
+
+.bai-step__tools {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bai-space-1);
+  margin: var(--bai-space-1) 0 0;
+  padding: 0;
+}
+
+/* Context meter: colour the readout with the meter */
+.bai-usage.bai-meter--warning { color: var(--bai-color-warning); }
+.bai-usage.bai-meter--danger  { color: var(--bai-color-danger); }

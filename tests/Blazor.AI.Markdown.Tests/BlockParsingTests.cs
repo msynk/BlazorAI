@@ -34,7 +34,7 @@ public sealed class BlockParsingTests
     public void HeadingsGetAnchorIdentifiers()
     {
         var heading = Assert.IsType<HeadingBlock>(Parse("## Getting Started Quickly").Blocks[0]);
-        Assert.Equal("getting-started-quickly", heading.Id);
+        Assert.Equal("bai-h-getting-started-quickly", heading.Id);
     }
 
     [Fact]

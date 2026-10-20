@@ -62,7 +62,7 @@ public sealed class AgentRun
     public IReadOnlyList<string>? PendingSuggestions { get; private set; }
 
     /// <summary>When the run started.</summary>
-    public DateTimeOffset StartedAt { get; }
+    public DateTimeOffset StartedAt { get; private set; }
 
     /// <summary>When the run ended.</summary>
     public DateTimeOffset? CompletedAt { get; private set; }
@@ -222,6 +222,39 @@ public sealed class AgentRun
     /// progress derived from step states.
     /// </remarks>
     private void OnStepChanged(AgentStep step) => Touch();
+
+    /// <summary>Rebuilds the run from persisted state. Used by the conversation serializer.</summary>
+    internal void RestoreState(
+        AgentRunStatus status,
+        string? goal,
+        string? pendingPrompt,
+        IReadOnlyList<string>? pendingSuggestions,
+        DateTimeOffset startedAt,
+        DateTimeOffset? completedAt,
+        TokenUsage usage,
+        AiError? error,
+        IEnumerable<AgentStep> steps)
+    {
+        Status = status;
+        Goal = goal;
+        PendingPrompt = pendingPrompt;
+        PendingSuggestions = pendingSuggestions;
+        StartedAt = startedAt;
+        CompletedAt = completedAt;
+        _usage = new StrongBox<TokenUsage>(usage);
+        Error = error;
+
+        foreach (var existing in _steps) existing.Changed -= OnStepChanged;
+        var restored = new List<AgentStep>();
+        foreach (var step in steps)
+        {
+            step.Changed += OnStepChanged;
+            restored.Add(step);
+        }
+
+        _steps = [.. restored];
+        Touch();
+    }
 
     private void Touch()
     {

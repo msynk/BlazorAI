@@ -176,6 +176,36 @@ ai.UseConversationStore<SqlConversationStore>();
 ai.AddModels(models, providers, defaultModelId: "my-model");
 ```
 
+A store persists `ConversationSnapshot` data, or its JSON, and hands a live `Conversation` back.
+`ConversationSerializer` does both directions, including every built-in part kind, attachments,
+citations, artifacts with their version history, and agent runs. A message that was still streaming
+when it was saved is restored as cancelled, and an application-defined part kind survives the round
+trip as a `CustomJsonPart` carrying its payload.
+
+```csharp
+public sealed class SqlConversationStore(AppDb db) : IConversationStore
+{
+    public async ValueTask SaveAsync(IConversation conversation, CancellationToken ct = default)
+    {
+        var json = ConversationSerializer.ToJson(ConversationSerializer.ToSnapshot(conversation));
+        await db.UpsertAsync(conversation.ConversationId, json, ct);
+    }
+
+    public async ValueTask<IConversation?> LoadAsync(string id, CancellationToken ct = default)
+    {
+        var json = await db.FindAsync(id, ct);
+        return json is null ? null : ConversationSerializer.FromJson(json);
+    }
+
+    // ListAsync and DeleteAsync over the same table.
+}
+```
+
+Whatever the store returns, `ConversationSerializer.ToConversation(IConversation)` gives the UI a
+`Conversation` to drive: it returns the same instance when the store kept a live one, and rebuilds
+one from a snapshot otherwise. Application-defined parts plug in through
+`ConversationSerializerOptions.SnapshotPart` and `RestorePart`.
+
 Implement `IModelCatalog` directly when the model list comes from a gateway at runtime rather than
 being fixed at startup.
 

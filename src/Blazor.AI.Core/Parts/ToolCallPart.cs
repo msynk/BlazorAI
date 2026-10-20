@@ -200,5 +200,31 @@ public sealed class ToolCallPart : MessagePart, IStreamablePart
         NotifyChanged();
     }
 
+    /// <summary>Rebuilds the call from persisted state. Used by the conversation serializer.</summary>
+    internal void RestoreState(
+        JsonElement? arguments,
+        string? rawArguments,
+        ToolCallStatus status,
+        ApprovalDecision approval,
+        ToolOutcome? result,
+        DateTimeOffset? startedAt,
+        DateTimeOffset? completedAt)
+    {
+        lock (_gate)
+        {
+            _arguments = arguments;
+            _rawArguments.Clear();
+            _rawArguments.Append(rawArguments ?? arguments?.GetRawText() ?? string.Empty);
+            _partialArgumentsStale = true;
+        }
+
+        Status = status;
+        Approval = approval;
+        Result = result;
+        StartedAt = startedAt;
+        CompletedAt = completedAt;
+        NotifyChanged();
+    }
+
     private static readonly JsonElement EmptyObject = JsonDocument.Parse("{}").RootElement.Clone();
 }

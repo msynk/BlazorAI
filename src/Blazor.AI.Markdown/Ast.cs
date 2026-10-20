@@ -25,6 +25,15 @@ public sealed class MarkdownDocument : MarkdownBlock
     /// <summary>The blocks, in order.</summary>
     public List<MarkdownBlock> Blocks { get; } = [];
 
+    /// <summary>
+    /// The footnotes the text cites, in the order they are first cited and numbered from one.
+    /// </summary>
+    /// <remarks>
+    /// A definition nobody cites is dropped, as GitHub does. Renderers list these after the blocks,
+    /// each with a link back to the reference that cited it.
+    /// </remarks>
+    public List<FootnoteBlock> Footnotes { get; } = [];
+
     /// <summary>An empty document.</summary>
     public static MarkdownDocument Empty { get; } = new();
 }
@@ -134,6 +143,24 @@ public sealed class TableBlock : MarkdownBlock
 
 /// <summary>A horizontal rule.</summary>
 public sealed class ThematicBreakBlock : MarkdownBlock;
+
+/// <summary>A footnote the text cites, listed on <see cref="MarkdownDocument.Footnotes"/>.</summary>
+/// <param name="label">The label the source used, without the caret.</param>
+/// <param name="number">The footnote's number, which is its position in the list.</param>
+public sealed class FootnoteBlock(string label, int number) : MarkdownBlock
+{
+    /// <summary>The label the source used, without the caret.</summary>
+    public string Label { get; } = label;
+
+    /// <summary>The footnote's number, which is its position in the list.</summary>
+    public int Number { get; } = number;
+
+    /// <summary>How many references cite this footnote, so each can get its own back-link.</summary>
+    public int ReferenceCount { get; internal set; }
+
+    /// <summary>The footnote content, which may contain several blocks.</summary>
+    public List<MarkdownBlock> Blocks { get; } = [];
+}
 
 /// <summary>A displayed mathematical expression.</summary>
 /// <param name="expression">The expression source, without delimiters.</param>
